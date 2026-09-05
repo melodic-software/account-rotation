@@ -235,7 +235,7 @@ Behavioral reference: `spike-04-swap.py` (memory slice), guard for guard.
   no control characters, 3 to 254 characters, lowercased.
 - [x] **1.3** (2026-09-05; the `ManagedLoginPolicy` record lives in Core so the planner can consult
   it, its reader `ManagedLoginPolicyReader` in the App; the reader ranks sources as the current
-  managed-settings docs do: HKLM `Settings` value, then `C:\Program Files\ClaudeCode\managed-settings.json`
+  managed-settings docs do: HKLM `Settings` value, then `%ProgramFiles%\ClaudeCode\managed-settings.json`
   on Windows, then HKCU, reading `forceLoginOrgUUID` from the highest-ranked present source only.)
   Ports `ICredentialPairStore` and `IClaudeCliAuthStatus` (returns
   `Result<ClaudeAuthStatus, string>` carrying the failure detail, never null); `ManagedLoginPolicy`
