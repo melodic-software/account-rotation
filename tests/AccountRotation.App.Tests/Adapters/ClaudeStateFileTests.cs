@@ -35,14 +35,14 @@ public sealed class ClaudeStateFileTests : IDisposable
         builder.Append("{\n  \"numStartups\": 412,\n  \"projects\": {\n");
         for (int index = 0; index < 400; index++)
         {
-            builder.Append("    \"/home/dev/repos/projekt-").Append(index).Append("\": {\n");
+            builder.Append("    \"/srv/dev/repos/projekt-").Append(index).Append("\": {\n");
             builder.Append("      \"allowedTools\": [\"Bash(ls:*)\", \"Read\"],\n");
             builder.Append("      \"lastPrompt\": \"Größe prüfen — 日本語 テスト ✓ ").Append(new string('x', 120)).Append("\",\n");
             builder.Append("      \"hasTrustDialogAccepted\": true\n");
             builder.Append("    },\n");
         }
 
-        builder.Append("    \"/home/dev/last\": { \"hasTrustDialogAccepted\": false }\n  },\n");
+        builder.Append("    \"/srv/dev/last\": { \"hasTrustDialogAccepted\": false }\n  },\n");
         builder.Append("  \"oauthAccount\": {\n    \"accountUuid\": \"old-uuid\",\n    \"emailAddress\": \"").Append(email).Append("\",\n    \"organizationRateLimitTier\": \"default_claude_max_20x\"\n  },\n");
         builder.Append("  \"cachedChangelog\": \"# Changelog\\n\\n## 2.1.261\\n\\n- Fixes\\n\",\n");
         builder.Append("  \"fallbackAvailableWarningThreshold\": 0.5\n}\n");

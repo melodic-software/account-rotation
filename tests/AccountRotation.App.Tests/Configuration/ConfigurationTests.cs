@@ -63,13 +63,13 @@ public sealed class ConfigurationTests : IDisposable
     {
         string path = Path.Combine(_root, "appdata", "config.json");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        await File.WriteAllTextAsync(path, """{"listenPort": 5000, "refreshLockWaitSeconds": 3, "claudeExecutable": "C:/tools/claude.exe"}""", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(path, """{"listenPort": 5000, "refreshLockWaitSeconds": 3, "claudeExecutable": "tools/claude.exe"}""", TestContext.Current.CancellationToken);
 
         AccountRotationConfiguration loaded = (await ConfigurationFile.LoadOrCreateAsync(path, Defaults(), TestContext.Current.CancellationToken)).Value;
 
         loaded.ListenPort.ShouldBe(5000);
         loaded.RefreshLockWaitBound.ShouldBe(TimeSpan.FromSeconds(3));
-        loaded.ClaudeExecutable.ShouldBe("C:/tools/claude.exe");
+        loaded.ClaudeExecutable.ShouldBe("tools/claude.exe");
         loaded.ProfilesRoot.ShouldBe(Defaults().ProfilesRoot);
     }
 

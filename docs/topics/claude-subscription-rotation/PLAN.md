@@ -209,7 +209,7 @@ analyzer posture, with one real behavior under test so the test lane is proven b
 - `git -C <repo> status --porcelain | grep -c "^?? .work"` prints `0` (memory tier never staged).
 - `gh pr list -R melodic-software/account-rotation --state merged --search "chore: sync standards"` shows ≥ 1 merged sync PR (may land after 0.4; not a blocker for Phase 1).
 
-### Phase 1: Tracer bullet, machine-wide switch through the page [TODO]
+### Phase 1: Tracer bullet, machine-wide switch through the page [DOING]
 
 Review: security
 Review: concurrency
@@ -218,10 +218,14 @@ The end-to-end slice: open the page, see the live account and every parked profi
 and every open Claude Code session bills the new account on its next request (AC 1, 2, 3, 9).
 Behavioral reference: `spike-04-swap.py` (memory slice), guard for guard.
 
-- [ ] **1.1** Core identity types (`design/type-inventory.md` "Identity and files"): `AccountEmail`,
+- [x] **1.1** (2026-09-05) Core identity types (`design/type-inventory.md` "Identity and files"): `AccountEmail`,
   `OAuthAccountBlock` (raw `JsonObject` preserved), `CredentialPair` (no `ToString` over tokens),
   `RefreshTokenFingerprint` (SHA-256 hex), `ParkedProfile`, `LiveAccountState`, and `Result<TValue, TError>`.
-- [ ] **1.2** `SwitchPlanner.Plan` (pure) with the `SwitchRefusal` cases in spike 04's order plus
+- [x] **1.2** (2026-09-05; deviations: the planner takes one `SwitchPlanningInput` record carrying
+  the inventory's parameters plus the profiles root and the live lineage's recorded owner;
+  `LiveIdentityUnverified` is checked **first**, since an unreconciled switch invalidates every
+  other answer including `AlreadyOnTarget`; a tenth refusal `MutationInProgress` is the executor's
+  answer to a second concurrent switch, the plan's 409.) `SwitchPlanner.Plan` (pure) with the `SwitchRefusal` cases in spike 04's order plus
   three the review added: `TargetLoginExpired` (parked `refreshTokenExpiresAt` in the past),
   `SwitchingBlockedByManagedPolicy` (a device-managed `forceLoginOrgUUID` is in effect), and
   `LiveIdentityUnverified` (an open switch journal, or a state-file account that does not match the
@@ -229,11 +233,18 @@ Behavioral reference: `spike-04-swap.py` (memory slice), guard for guard.
   "outgoing has no credentials" (post-`/login` overwrite case) yields a plan with `Outgoing = null`.
   `AccountEmail.Parse` rules stated and tested: exactly one `@`, no whitespace, no path separators,
   no control characters, 3 to 254 characters, lowercased.
-- [ ] **1.3** Ports `ICredentialPairStore` and `IClaudeCliAuthStatus` (returns
+- [x] **1.3** (2026-09-05; the `ManagedLoginPolicy` record lives in Core so the planner can consult
+  it, its reader `ManagedLoginPolicyReader` in the App; the reader ranks sources as the current
+  managed-settings docs do: HKLM `Settings` value, then `C:\Program Files\ClaudeCode\managed-settings.json`
+  on Windows, then HKCU, reading `forceLoginOrgUUID` from the highest-ranked present source only.)
+  Ports `ICredentialPairStore` and `IClaudeCliAuthStatus` (returns
   `Result<ClaudeAuthStatus, string>` carrying the failure detail, never null); `ManagedLoginPolicy`
   (reads the platform's managed settings file and, on Windows, the HKLM policy key; exposes
   `ForceLoginOrgUuid`).
-- [ ] **1.4** App concrete file classes: `AtomicJsonFile` (temp file in the target directory,
+- [x] **1.4** (2026-09-05; `AtomicBytesFile` is the byte-level half the state-file splice uses, the
+  JSON writer serializes through it; the live-dir cross-check against `projectsDirectory` is not
+  wired yet, it joins the dashboard warnings when the CLI status is read at startup in Phase 2.)
+  App concrete file classes: `AtomicJsonFile` (temp file in the target directory,
   created with `UnixCreateMode` 0600 on non-Windows, `Flush(true)`, then `File.Replace` when the
   target exists or `File.Move` when it does not; retry a sharing violation with jittered backoff from
   50 ms up to 2 s total, then fail), `ClaudeStateFile` (re-read immediately before patch; locate the
@@ -253,7 +264,8 @@ Behavioral reference: `spike-04-swap.py` (memory slice), guard for guard.
   `%OneDriveCommercial%`, `%OneDriveConsumer%`, a `Dropbox` or `Google Drive` folder under the user
   profile): Files-On-Demand dehydrates a credential file into a placeholder, and a synced folder
   uploads refresh tokens, which is a second holder by another name.
-- [ ] **1.5** `OAuthRefreshLock`: the tool **participates in Claude Code's own refresh mutex**
+- [x] **1.5** (2026-09-05; `LibraryImport` of `CreateDirectoryW` and libc `mkdir`; the held lock's
+  mtime is not refreshed, a hold lasts milliseconds.) `OAuthRefreshLock`: the tool **participates in Claude Code's own refresh mutex**
   instead of sampling it. Verified in the installed binary (2.1.261): the CLI takes
   `<live dir>/.oauth_refresh.lock` through `proper-lockfile` (`stale: 60000`, `update: 5000`), a
   directory created with an exclusive `mkdir`, and a contending session gets the retryable
@@ -272,7 +284,11 @@ Behavioral reference: `spike-04-swap.py` (memory slice), guard for guard.
   the re-patch guard) from the design and record it here; if they do not, keep the patch, performed
   under the acquired lock immediately after the credential move, and treat the CLI's later rewrite
   of the block as expected. Either outcome is recorded as a dated note under this item.
-- [ ] **1.5b** `LiveDirectorySwitch` under the `CredentialMutationGate` (one `SemaphoreSlim(1, 1)`
+- [x] **1.5b** (2026-09-05; the parked-pair refresh before unparking waits for Phase 2's token
+  refresh client; a crash after the park and before the unpark is **unwound** (the outgoing pair
+  restored) rather than completed, the least surprising outcome for the user; the live lineage's
+  owner is recorded in `<appdata>/state/live-owner.json`; the mutation gate wait for a switch is
+  zero, so a second switch is the 409 immediately.) `LiveDirectorySwitch` under the `CredentialMutationGate` (one `SemaphoreSlim(1, 1)`
   every credential-touching operation acquires with a timeout and releases in `finally`; a second
   concurrent switch gets 409) and the `InstanceLock` (an owner-only lock file under app data; a
   second instance refuses to start and prints the running instance's URL): snapshot live state →
@@ -289,17 +305,21 @@ Behavioral reference: `spike-04-swap.py` (memory slice), guard for guard.
   extra copy to `<appdata>/quarantine/` with a blocking banner, never silently deleted; until both
   reconcile, switching refuses with `LiveIdentityUnverified`. One structured log event per switch
   and per refusal; never a token.
-- [ ] **1.6** Configuration: `AccountRotationConfiguration`, `ConfigurationDefaults.ForCurrentUser()`
+- [x] **1.6** (2026-09-05; unknown command-line arguments pass through to the host rather than
+  failing, because `WebApplication.CreateBuilder` reads `--key value` pairs and the test host passes
+  its runner's own arguments to the entry point; the shipped template is the first-run file itself,
+  written with the defaults resolved.) Configuration: `AccountRotationConfiguration`, `ConfigurationDefaults.ForCurrentUser()`
   (live dir from `CLAUDE_CONFIG_DIR` else `~/.claude`; state file `~/.claude.json` when unset,
   `<dir>/.claude.json` when set; profiles root `~/.claude-profiles`; app data
   `%LOCALAPPDATA%\account-rotation` or XDG), `ConfigurationFile` (load; first run writes
   `config.template.json` content with defaults resolved at runtime), `--config`, `--port`, `--version`.
-- [ ] **1.7** Endpoints `GET /api/dashboard` (identity only in this phase: live account, parked
+- [x] **1.7** (2026-09-05; plus a loopback-Host middleware on every route; the bundled CA2025
+  analyzer crashes on the minimal-API lambdas and is off in `.globalconfig`.) Endpoints `GET /api/dashboard` (identity only in this phase: live account, parked
   profiles with `HasCredentials`, roster entries) and `POST /api/accounts/{email}/switch` (200
   `SwitchOutcome`, 409 `SwitchRefusal`), `SameOriginMutationFilter` on every mutating route.
-- [ ] **1.8** Page: `wwwroot/index.html`, `app.js`, `app.css` embedded; cards with email, live badge,
+- [x] **1.8** (2026-09-05) Page: `wwwroot/index.html`, `app.js`, `app.css` embedded; cards with email, live badge,
   "needs login" badge, Switch button; result toast; polls `GET /api/dashboard` every 10 s.
-- [ ] **1.9** `tests/acceptance/check-single-holder.sh`: SHA-256 of `claudeAiOauth.refreshToken` in the
+- [x] **1.9** (2026-09-05; the runbook also carries the 1.5a probe steps as its first section.) `tests/acceptance/check-single-holder.sh`: SHA-256 of `claudeAiOauth.refreshToken` in the
   live file and every `~/.claude-profiles/*/.credentials.json`; prints `files=N distinct=N duplicates=0`
   and exits 1 on any duplicate (the spike 04 hash check generalized to ten). `tests/acceptance/README.md`
   lists the human steps for AC 1, 2, 9.
@@ -308,25 +328,25 @@ Behavioral reference: `spike-04-swap.py` (memory slice), guard for guard.
 
 | File | Action | Rationale |
 |---|---|---|
-| [ ] `src/AccountRotation.Core/Result.cs` | CREATE | result type |
-| [ ] `src/AccountRotation.Core/Identity/{AccountEmail,OAuthAccountBlock,CredentialPair,RefreshTokenFingerprint,ParkedProfile,LiveAccountState}.cs` | CREATE | 1.1 |
-| [ ] `src/AccountRotation.Core/Switching/{SwitchPlanner,SwitchPlan,SwitchRefusal,SwitchOutcome}.cs` | CREATE | 1.2 |
-| [ ] `src/AccountRotation.Core/Ports/{ICredentialPairStore,IClaudeCliAuthStatus}.cs` | CREATE | 1.3 |
-| [ ] `src/AccountRotation.Core/Configuration/AccountRotationConfiguration.cs` | CREATE | 1.6 |
-| [ ] `src/AccountRotation.App/Adapters/FileSystem/{AtomicJsonFile,ClaudeStateFile,ProfileFolderStore,FileSystemCredentialPairStore}.cs` | CREATE | 1.4 |
-| [ ] `src/AccountRotation.App/Adapters/Process/ClaudeCliProcessAuthStatus.cs` | CREATE | 1.4 |
-| [ ] `src/AccountRotation.App/Adapters/FileSystem/OAuthRefreshLock.cs` (P/Invoke exclusive mkdir, stale steal at 60 s) | CREATE | 1.5 |
-| [ ] `src/AccountRotation.App/Switching/{LiveDirectorySwitch,SwitchJournal,CredentialMutationGate}.cs` | CREATE | 1.5b |
-| [ ] `src/AccountRotation.App/{InstanceLock,ManagedLoginPolicy}.cs`, `Adapters/Process/ClaudeExecutableLocator.cs` | CREATE | 1.3, 1.4, 1.5 |
-| [ ] `src/AccountRotation.Core/Identity/AccountEmail.cs` (Parse rules), `Switching/SwitchRefusal.cs` (nine cases) | MODIFY | 1.2 |
-| [ ] `src/AccountRotation.App/Configuration/{ConfigurationDefaults,ConfigurationFile}.cs`, `config.template.json` | CREATE | 1.6 |
-| [ ] `src/AccountRotation.App/Endpoints/{DashboardEndpoints,SwitchEndpoints}.cs`, `Dashboard/{DashboardAssembler,DashboardView,AccountCardView}.cs`, `Security/SameOriginMutationFilter.cs` | CREATE | 1.7 |
-| [ ] `src/AccountRotation.App/Program.cs` | MODIFY | composition root, explicit service types |
-| [ ] `src/AccountRotation.App/wwwroot/{index.html,app.js,app.css}` | CREATE | 1.8 |
-| [ ] `tests/AccountRotation.Core.Tests/Switching/SwitchPlannerTests.cs`, `Identity/*Tests.cs` | CREATE | output-based tests |
-| [ ] `tests/AccountRotation.App.Tests/Adapters/{AtomicJsonFileTests,ClaudeStateFileTests,FileSystemCredentialPairStoreTests,ProfileFolderStoreTests}.cs` | CREATE | state-based over temp dirs |
-| [ ] `tests/AccountRotation.App.Tests/Endpoints/SwitchEndpointTests.cs` | CREATE | `WebApplicationFactory`, doubles for the two ports |
-| [ ] `tests/acceptance/check-single-holder.sh` (takes `<profiles-root> <live-dir>` as arguments), `tests/acceptance/check-live-identity.sh`, `tests/acceptance/README.md` | CREATE | 1.9 |
+| [x] `src/AccountRotation.Core/Result.cs` | CREATE | result type |
+| [x] `src/AccountRotation.Core/Identity/{AccountEmail,OAuthAccountBlock,CredentialPair,RefreshTokenFingerprint,ParkedProfile,LiveAccountState}.cs` | CREATE | 1.1 |
+| [x] `src/AccountRotation.Core/Switching/{SwitchPlanner,SwitchPlan,SwitchRefusal,SwitchOutcome}.cs` (plus `SwitchPlanningInput`, `ManagedLoginPolicy`) | CREATE | 1.2 |
+| [x] `src/AccountRotation.Core/Ports/{ICredentialPairStore,IClaudeCliAuthStatus}.cs` | CREATE | 1.3 |
+| [x] `src/AccountRotation.Core/Configuration/AccountRotationConfiguration.cs` | CREATE | 1.6 |
+| [x] `src/AccountRotation.App/Adapters/FileSystem/{AtomicJsonFile,ClaudeStateFile,ProfileFolderStore,FileSystemCredentialPairStore}.cs` (plus `AtomicBytesFile`) | CREATE | 1.4 |
+| [x] `src/AccountRotation.App/Adapters/Process/ClaudeCliProcessAuthStatus.cs` | CREATE | 1.4 |
+| [x] `src/AccountRotation.App/Adapters/FileSystem/OAuthRefreshLock.cs` (P/Invoke exclusive mkdir, stale steal at 60 s) | CREATE | 1.5 |
+| [x] `src/AccountRotation.App/Switching/{LiveDirectorySwitch,SwitchJournal,CredentialMutationGate}.cs` (plus `SwitchOptions`) | CREATE | 1.5b |
+| [x] `src/AccountRotation.App/{Switching/InstanceLock,ManagedLoginPolicyReader}.cs`, `Adapters/Process/ClaudeExecutableLocator.cs` | CREATE | 1.3, 1.4, 1.5 |
+| [x] `src/AccountRotation.Core/Identity/AccountEmail.cs` (Parse rules), `Switching/SwitchRefusal.cs` (ten cases) | MODIFY | 1.2 |
+| [x] `src/AccountRotation.App/Configuration/{ConfigurationDefaults,ConfigurationFile,ConfigurationValidator,StartupArguments}.cs` (the first-run file is the template) | CREATE | 1.6 |
+| [x] `src/AccountRotation.App/Endpoints/{DashboardEndpoints,SwitchEndpoints}.cs`, `Dashboard/{DashboardAssembler,DashboardViews}.cs`, `Security/{SameOriginMutationFilter,LoopbackHostMiddleware}.cs`, `Hosting/{AppComposition,StartupReconciliation,InstanceLockHolder,EmbeddedPage}.cs` | CREATE | 1.7 |
+| [x] `src/AccountRotation.App/Program.cs` | MODIFY | composition root, explicit service types |
+| [x] `src/AccountRotation.App/wwwroot/{index.html,app.js,app.css}` | CREATE | 1.8 |
+| [x] `tests/AccountRotation.Core.Tests/Switching/SwitchPlannerTests.cs`, `Identity/*Tests.cs` | CREATE | output-based tests |
+| [x] `tests/AccountRotation.App.Tests/Adapters/{AtomicJsonFileTests,ClaudeStateFileTests,FileSystemCredentialPairStoreTests,ProfileFolderStoreTests,OAuthRefreshLockTests,ClaudeExecutableLocatorTests,ClaudeCliProcessAuthStatusTests}.cs`, `Switching/{LiveDirectorySwitchTests,CoordinationTests}.cs`, `Configuration/ConfigurationTests.cs`, `ManagedLoginPolicyReaderTests.cs` | CREATE | state-based over temp dirs |
+| [x] `tests/AccountRotation.App.Tests/Endpoints/SwitchEndpointTests.cs` (with `AppFactory`) | CREATE | `WebApplicationFactory`, doubles for the two ports |
+| [x] `tests/acceptance/check-single-holder.sh` (takes `<profiles-root> <live-dir>` as arguments), `tests/acceptance/check-live-identity.sh`, `tests/acceptance/README.md` | CREATE | 1.9 |
 
 **Sanity Check:**
 
