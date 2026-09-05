@@ -9,7 +9,8 @@
 #   - a drive-root path, X:\ or X:/, where X is not the tail of a URL scheme;
 #   - a per-user home path: \Users\<name>, /Users/<name>, /home/<name>;
 #   - any extra literal listed in CHECK_NO_MACHINE_PATHS_NAMES (comma-separated),
-#     which an operator sets locally to their own user name.
+#     which an operator sets locally to their own user name; each name is
+#     matched as a fixed string, so regex metacharacters in it stay literal.
 set -euo pipefail
 
 repository_root="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
@@ -19,16 +20,23 @@ surfaces=(src tests README.md docs)
 [[ -f config.template.json ]] && surfaces+=(config.template.json)
 
 pattern='(^|[^A-Za-z])[A-Za-z]:[\\/]|[\\/]Users[\\/][A-Za-z0-9._-]+|/home/[A-Za-z0-9._-]+'
+# Operator names are searched as fixed strings (grep -F), never spliced into the
+# ERE above: a name such as "a.b" or "[" would otherwise widen the pattern or
+# make grep fail, and a failed grep inside the if would read as "no match".
+name_args=()
 if [[ -n "${CHECK_NO_MACHINE_PATHS_NAMES:-}" ]]; then
   IFS=',' read -r -a extra_names <<< "$CHECK_NO_MACHINE_PATHS_NAMES"
   for name in "${extra_names[@]}"; do
-    [[ -n "$name" ]] && pattern+="|$name"
+    [[ -n "$name" ]] && name_args+=(-e "$name")
   done
 fi
 
 findings=0
 while IFS= read -r -d '' file; do
   if grep -nE "$pattern" -- "$file"; then
+    findings=1
+  fi
+  if (( ${#name_args[@]} > 0 )) && grep -nF "${name_args[@]}" -- "$file"; then
     findings=1
   fi
 done < <(git ls-files -z -- "${surfaces[@]}")
