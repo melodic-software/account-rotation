@@ -1,8 +1,9 @@
 namespace AccountRotation.Core.Switching;
 
 /// <summary>
-/// Why a switch is not planned. Ordered as the planner checks them: the spike's
-/// guards first, then the three the plan review added.
+/// Why a switch is not planned or not executed. Ordered as the planner checks
+/// them: the spike's guards first, then the three the plan review added; the
+/// last is the executor's own, for a second mutation arriving while one runs.
 /// </summary>
 public enum SwitchRefusal
 {
@@ -15,4 +16,5 @@ public enum SwitchRefusal
     TargetLoginExpired,
     SwitchingBlockedByManagedPolicy,
     LiveIdentityUnverified,
+    MutationInProgress,
 }

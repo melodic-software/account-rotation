@@ -108,7 +108,11 @@ public sealed class SwitchPlannerTests
     public void RefusesWhenTheTargetIsAlreadyLive()
     {
         SwitchPlanningInput input = Baseline();
-        input = input with { Live = input.Live with { Account = Account("B@Example.com") } };
+        input = input with
+        {
+            Live = input.Live with { Account = Account("B@Example.com") },
+            LiveFingerprintOwner = AccountEmail.Parse("b@example.com").Value,
+        };
 
         SwitchPlanner.Plan(input).Error.ShouldBe(SwitchRefusal.AlreadyOnTarget);
     }
@@ -175,9 +179,20 @@ public sealed class SwitchPlannerTests
         {
             Target = input.Target with { HasCredentials = false, Account = null },
             TargetCredentials = null,
-            JournalOpen = true,
+            Policy = new ManagedLoginPolicy("org-uuid", "managed-settings.json"),
         };
 
         SwitchPlanner.Plan(input).Error.ShouldBe(SwitchRefusal.TargetHasNoCredentials);
+    }
+
+    [Fact]
+    public void AnUnverifiedLiveIdentityOutranksEveryOtherAnswer()
+    {
+        // The state file already names the target, but with a switch unreconciled that
+        // claim cannot be trusted, so the refusal is the unverified identity, not AlreadyOnTarget.
+        SwitchPlanningInput input = Baseline();
+        input = input with { Live = input.Live with { Account = Account("b@example.com") }, JournalOpen = true };
+
+        SwitchPlanner.Plan(input).Error.ShouldBe(SwitchRefusal.LiveIdentityUnverified);
     }
 }

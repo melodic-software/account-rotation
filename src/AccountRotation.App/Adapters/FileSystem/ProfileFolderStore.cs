@@ -38,7 +38,7 @@ internal sealed class ProfileFolderStore
         foreach (string folder in Directory.EnumerateDirectories(_profilesRoot))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            OAuthAccountBlock? account = await ReadAccountAsync(folder, cancellationToken);
+            OAuthAccountBlock? account = await ReadAccountInFolderAsync(folder, cancellationToken);
             if (account?.Email is not AccountEmail email)
             {
                 continue;
@@ -57,7 +57,7 @@ internal sealed class ProfileFolderStore
         string folder = Path.Combine(_profilesRoot, ProfileFolderName.FromEmail(email));
         Directory.CreateDirectory(folder);
         _discovered.Add(folder);
-        OAuthAccountBlock? account = await ReadAccountAsync(folder, cancellationToken);
+        OAuthAccountBlock? account = await ReadAccountInFolderAsync(folder, cancellationToken);
         return new ParkedProfile(email, folder, HasCredentials(folder), account);
     }
 
@@ -92,7 +92,7 @@ internal sealed class ProfileFolderStore
         string profilePath = Path.Combine(folder, ProfileFileName);
         if (!File.Exists(profilePath))
         {
-            OAuthAccountBlock? account = await ReadAccountAsync(folder, cancellationToken);
+            OAuthAccountBlock? account = await ReadAccountInFolderAsync(folder, cancellationToken);
             if (account is not null)
             {
                 await AtomicJsonFile.WriteAsync(profilePath, account.Raw, cancellationToken);
@@ -118,10 +118,14 @@ internal sealed class ProfileFolderStore
         }
     }
 
+    /// <summary>The identity recorded in a folder, from its profile or a fresh login's state file.</summary>
+    public Task<OAuthAccountBlock?> ReadAccountAsync(string folderPath, CancellationToken cancellationToken) =>
+        ReadAccountInFolderAsync(UnderRoot(folderPath), cancellationToken);
+
     private static bool HasCredentials(string folder) =>
         File.Exists(Path.Combine(folder, FileSystemCredentialPairStore.FileName));
 
-    private static async Task<OAuthAccountBlock?> ReadAccountAsync(string folder, CancellationToken cancellationToken)
+    private static async Task<OAuthAccountBlock?> ReadAccountInFolderAsync(string folder, CancellationToken cancellationToken)
     {
         string profilePath = Path.Combine(folder, ProfileFileName);
         if (File.Exists(profilePath))

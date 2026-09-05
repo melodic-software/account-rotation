@@ -13,6 +13,15 @@ public static class SwitchPlanner
     {
         ArgumentNullException.ThrowIfNull(input);
 
+        // An unreconciled switch or a live pair whose recorded owner is not the account
+        // the state file names means nothing below can be trusted, so this comes first.
+        AccountEmail? liveEmail = input.Live.Account?.Email;
+        bool ownerMismatch = input.LiveFingerprintOwner is AccountEmail owner && liveEmail is AccountEmail named && owner != named;
+        if (input.JournalOpen || ownerMismatch)
+        {
+            return Refuse(SwitchRefusal.LiveIdentityUnverified);
+        }
+
         if (SameDirectory(input.Target.FolderPath, input.Live.LiveConfigDirectory))
         {
             return Refuse(SwitchRefusal.TargetIsLiveDirectory);
@@ -28,7 +37,6 @@ public static class SwitchPlanner
             return Refuse(SwitchRefusal.TargetHasNoAccountBlock);
         }
 
-        AccountEmail? liveEmail = input.Live.Account?.Email;
         if (liveEmail == incoming)
         {
             return Refuse(SwitchRefusal.AlreadyOnTarget);
@@ -52,12 +60,6 @@ public static class SwitchPlanner
         if (input.Policy.BlocksSwitching)
         {
             return Refuse(SwitchRefusal.SwitchingBlockedByManagedPolicy);
-        }
-
-        bool ownerMismatch = input.LiveFingerprintOwner is AccountEmail owner && liveEmail is AccountEmail named && owner != named;
-        if (input.JournalOpen || ownerMismatch)
-        {
-            return Refuse(SwitchRefusal.LiveIdentityUnverified);
         }
 
         AccountEmail? outgoing = input.Live.HasCredentials ? liveEmail : null;
