@@ -554,7 +554,7 @@ One executable, a config template, one login, working dashboard on a fresh Windo
 - `gh release view <tag> -R melodic-software/account-rotation --json assets -q '.assets[].name'` lists `account-rotation-win-x64.exe` and `config.template.json`.
 - Laptop (human): dashboard reachable; `profilesRoot` override honored; recorded in `tests/acceptance/README.md`.
 
-### Phase 6: `rate-limit-guard` tee `account` field (separate repository and PR) [TODO]
+### Phase 6: `rate-limit-guard` tee `account` field (separate repository and PR) [DOING]
 
 Review: security
 
@@ -563,7 +563,8 @@ account (AC 10; design thread T14). Repository `melodic-software/claude-code-plu
 `feat/rate-limit-guard-tee-account-field`, one PR referencing #1218. Fully independent of Phases 1
 to 5 except that Phase 2's `RateLimitGuardTeeFileReader` already parses the key when present.
 
-- [ ] **6.1 Pre-flight consumer check (first):** `bash scripts/check-loop-lane-floor-drift.sh --check`
+- [x] **6.1 Pre-flight consumer check (first):** (2026-09-05, worker W6; the six registered carriers
+  matched the floor before and after the change, and the full reader list is in the PR body.) `bash scripts/check-loop-lane-floor-drift.sh --check`
   prints the registered carriers (three lane `SKILL.md` bodies, the `extract-ssot` orchestrated mode,
   two launch-prompt templates) and `grep -rn "rate-limits.json" plugins/ docs/ prompts/ scripts/`
   lists every other reader. Record them in the PR body. The "Operable floor" staleness bullet states
@@ -572,7 +573,13 @@ to 5 except that Phase 2's `RateLimitGuardTeeFileReader` already parses the key 
   the six copies moved together). Measured on this desktop 2026-09-04 for the mechanism choice: state
   file 88 KB; bash `$(<file)` plus parameter-expansion extraction 3.6 to 4.0 s (unusable); `jq -r`
   over stdin 35 ms; `claude auth status --json` 175 ms.
-- [ ] **6.2** `plugins/rate-limit-guard/scripts/statusline-tee.sh`, **drain path only** (the render
+- [x] **6.2** (2026-09-05, worker W6; deviations: the batch jq pass emits a fifth line as well, whether
+  the chosen body already carries an account-shaped key, decided with `keys_unsorted` rather than a
+  substring test over the body; and every jq token line is CR-stripped in `_rlg_absorb_jq_lines`
+  because a native Windows jq terminates lines with CRLF and only the last line was ever clean, a
+  latent defect the two new lines exposed, fixed with the payload line left byte-for-byte intact;
+  the non-spool paths, `RLG_TEE_ASYNC=1` and bash below 4.2, write no `account` key since they have
+  no spool file to date the state file against.) `plugins/rate-limit-guard/scripts/statusline-tee.sh`, **drain path only** (the render
   path stays fork-free): after the batch jq chooses the record, resolve the state file
   (`$CLAUDE_CONFIG_DIR/.claude.json` when set, else `$HOME/.claude.json`) and read the identity with
   one `jq -r '.oauthAccount.emailAddress // empty' < "$state_file"` (bash opens the file, so the
@@ -585,13 +592,16 @@ to 5 except that Phase 2's `RateLimitGuardTeeFileReader` already parses the key 
   since, so the identity is omitted rather than mislabeled. To make (ii) possible the batch jq pass
   also emits the chosen shard name as a fourth line. Absent, malformed, or stale → no `account` key,
   statusline output unchanged. Header comments updated to match.
-- [ ] **6.3** `scripts/statusline-tee.test.sh` cases (`set -o pipefail`, temp cleanup on every exit
+- [x] **6.3** (2026-09-05, worker W6; 138 assertions pass on this desktop, twelve name `account.email`,
+  two guard the CRLF strip; control characters and the 254-character bound are covered by code, not
+  by a fixture.) `scripts/statusline-tee.test.sh` cases (`set -o pipefail`, temp cleanup on every exit
   path per the bash overlay): state file present → `account.email` equals it; absent → key absent;
   `CLAUDE_CONFIG_DIR` set → `<dir>/.claude.json` read; malformed value → key absent and wrapped
   statusline stdout byte-identical; stdin payload carrying `account_id` → passthrough wins and no
   injected `account`; state file touched after the spool record → key absent; the existing zero-fork
   render trace case still passes.
-- [ ] **6.4** Docs in the same PR: `reference/reader-contract.md` amends the floor's staleness bullet
+- [x] **6.4** (2026-09-05, worker W6; version `0.7.33` → `0.8.0`; the §6 paragraph changed is the
+  account-identity one, which precedes the guard-mode telemetry paragraph that actually closes §6.) Docs in the same PR: `reference/reader-contract.md` amends the floor's staleness bullet
   ("the file carries an `account.email` field when the writer could attribute the observation; a
   write is still the signal that the windows changed under you") and documents the key, its source,
   the staleness guard, and the recheck trigger (`oauthAccount.emailAddress` is internal CLI state)
@@ -600,7 +610,9 @@ to 5 except that Phase 2's `RateLimitGuardTeeFileReader` already parses the key 
   updated from "designed elsewhere" to "writer-side identity landed; reader-side invalidation and the
   lane-floor re-audit remain #1218 follow-up"; plugin `README.md` multi-account paragraph updated;
   `CHANGELOG.md` entry; plugin version bump per the marketplace convention.
-- [ ] **6.5** Open the PR with `/source-control:pull-request`; body references #1218, lists the
+- [x] **6.5** (2026-09-05: claude-code-plugins#3778, opened by the main session after a fresh-context
+  verifier passed all eleven criteria; #1218 is closed as not planned, so the body cites it as `Refs`
+  with a `No related issue:` line rather than a closing keyword.) Open the PR with `/source-control:pull-request`; body references #1218, lists the
   consumers from 6.1, carries the timing numbers, and names the reader-side follow-up as out of scope.
 - [ ] **6.6** In this repo, `DashboardAssembler` treats a tee snapshot for the live account as
   unattributed ("pre-switch windows") when its `resets_at` values equal the outgoing account's last
