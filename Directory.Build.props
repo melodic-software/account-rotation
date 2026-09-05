@@ -1,0 +1,12 @@
+<Project>
+  <!-- Strict analysis posture, vendored from melodic-software/standards
+       (components/dotnet-analysis) until the standards sync owns the pair. -->
+  <Import Project="$(MSBuildThisFileDirectory)eng/dotnet-analysis/Directory.Build.props" />
+
+  <!-- Project scope shared by every project in this repository. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>14.0</LangVersion>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+</Project>
