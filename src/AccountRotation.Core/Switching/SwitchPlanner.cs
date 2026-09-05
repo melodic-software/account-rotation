@@ -22,6 +22,13 @@ public static class SwitchPlanner
             return Refuse(SwitchRefusal.LiveIdentityUnverified);
         }
 
+        // A live pair whose account the state file does not name has no folder to be parked
+        // under, and an unpark onto it would fail half-way with the journal left open.
+        if (input.Live.HasCredentials && liveEmail is null)
+        {
+            return Refuse(SwitchRefusal.LiveIdentityUnverified);
+        }
+
         if (SameDirectory(input.Target.FolderPath, input.Live.LiveConfigDirectory))
         {
             return Refuse(SwitchRefusal.TargetIsLiveDirectory);

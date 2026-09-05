@@ -78,6 +78,16 @@ public sealed class SwitchPlannerTests
     }
 
     [Fact]
+    public void RefusesWhenTheLivePairHasNoAccountIdentity()
+    {
+        // The pair exists but the state file names nobody: there is no folder to park it under.
+        SwitchPlanningInput input = Baseline();
+        input = input with { Live = input.Live with { Account = null }, LiveFingerprintOwner = null };
+
+        SwitchPlanner.Plan(input).Error.ShouldBe(SwitchRefusal.LiveIdentityUnverified);
+    }
+
+    [Fact]
     public void RefusesWhenTheTargetFolderIsTheLiveDirectory()
     {
         SwitchPlanningInput input = Baseline();
