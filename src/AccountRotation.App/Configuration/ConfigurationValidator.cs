@@ -73,14 +73,46 @@ internal static class ConfigurationValidator
         return Result<Unit, string>.Success(Unit.Value);
     }
 
-    /// <summary>The mount point that owns a path, so a junction or mapped drive compares by its real volume.</summary>
+    /// <summary>
+    /// The volume that owns a path: the drive root on Windows, and elsewhere the
+    /// longest mount point that contains the path. <see cref="DriveInfo"/> built
+    /// from a path reports the path itself as its name on Unix, which would make
+    /// every two directories look like two volumes.
+    /// </summary>
     public static string? VolumeOf(string path)
     {
         try
         {
-            return new DriveInfo(Path.GetFullPath(path)).Name;
+            string full = Path.GetFullPath(path);
+            if (OperatingSystem.IsWindows())
+            {
+                return new DriveInfo(full).Name;
+            }
+
+            string? owner = null;
+            foreach (DriveInfo drive in DriveInfo.GetDrives())
+            {
+                string mount = Path.TrimEndingDirectorySeparator(drive.Name);
+                bool owns = mount == "/"
+                    || string.Equals(full, mount, StringComparison.Ordinal)
+                    || full.StartsWith(mount + Path.DirectorySeparatorChar, StringComparison.Ordinal);
+                if (owns && (owner is null || mount.Length > owner.Length))
+                {
+                    owner = mount;
+                }
+            }
+
+            return owner;
         }
         catch (ArgumentException)
+        {
+            return null;
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
         {
             return null;
         }

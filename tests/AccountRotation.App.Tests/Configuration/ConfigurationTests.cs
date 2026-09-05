@@ -100,6 +100,20 @@ public sealed class ConfigurationTests : IDisposable
     }
 
     [Fact]
+    public void TheVolumeResolverPutsADirectoryAndItsChildOnOneVolume()
+    {
+        // The real resolver, on this machine: a temp directory and a path beneath it share a
+        // volume on every platform (a Unix DriveInfo built from the path would say otherwise).
+        string parent = Path.GetTempPath();
+        string child = Path.Combine(parent, "account-rotation-volume-probe", "live");
+
+        string? volume = ConfigurationValidator.VolumeOf(parent);
+
+        volume.ShouldNotBeNull();
+        ConfigurationValidator.VolumeOf(child).ShouldBe(volume);
+    }
+
+    [Fact]
     public void AProfilesRootInsideTheLiveDirectoryIsRefused()
     {
         AccountRotationConfiguration configuration = Defaults() with { ProfilesRoot = Path.Combine(_home, ".claude", "profiles") };

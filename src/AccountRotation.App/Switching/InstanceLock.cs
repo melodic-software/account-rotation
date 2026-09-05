@@ -4,19 +4,22 @@ namespace AccountRotation.App.Switching;
 
 /// <summary>
 /// One running instance per app-data directory: an exclusively opened lock
-/// file holding the running instance's URL, so a second launch refuses and
-/// prints where the first one is listening.
+/// file, plus a sibling file holding the running instance's URL so a second
+/// launch refuses and prints where the first one is listening.
 /// </summary>
 internal sealed class InstanceLock : IDisposable
 {
     public const string FileName = "instance.lock";
+    public const string UrlFileName = "instance.url";
 
     private readonly FileStream _stream;
+    private readonly string _urlFilePath;
 
-    private InstanceLock(FileStream stream, string lockFilePath)
+    private InstanceLock(FileStream stream, string lockFilePath, string urlFilePath)
     {
         _stream = stream;
         LockFilePath = lockFilePath;
+        _urlFilePath = urlFilePath;
     }
 
     public string LockFilePath { get; }
@@ -28,13 +31,19 @@ internal sealed class InstanceLock : IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(listenUrl);
         Directory.CreateDirectory(appDataDirectory);
         string lockFilePath = Path.Combine(appDataDirectory, FileName);
+        string urlFilePath = Path.Combine(appDataDirectory, UrlFileName);
 
+        // Exclusive on every platform: Windows refuses a second open outright (a sharing
+        // violation), and .NET on Unix takes flock(LOCK_EX) for FileShare.None, which the
+        // kernel releases with the handle even after a crash. Delete-on-close is Windows-only
+        // because .NET on Unix unlinks the path at open, so a second opener would create a
+        // fresh inode and lock that one instead; there the empty lock file simply persists.
         FileStreamOptions options = new()
         {
             Mode = FileMode.OpenOrCreate,
             Access = FileAccess.ReadWrite,
-            Share = FileShare.Read,
-            Options = FileOptions.DeleteOnClose,
+            Share = FileShare.None,
+            Options = OperatingSystem.IsWindows() ? FileOptions.DeleteOnClose : FileOptions.None,
         };
         if (!OperatingSystem.IsWindows())
         {
@@ -50,19 +59,14 @@ internal sealed class InstanceLock : IDisposable
             }
             catch (IOException)
             {
-                return Result<InstanceLock, string>.Failure("another instance is running at " + ReadRunningUrl(lockFilePath) + " (lock file " + lockFilePath + ")");
+                return Result<InstanceLock, string>.Failure("another instance is running at " + ReadRunningUrl(urlFilePath) + " (lock file " + lockFilePath + ")");
             }
 
-            stream.SetLength(0);
-            using (StreamWriter writer = new(stream, leaveOpen: true))
-            {
-                writer.Write(listenUrl);
-                writer.Flush();
-            }
+            // The URL sits beside the lock, not inside it: the lock file is held without
+            // sharing, so a refused second instance could not read it from there.
+            File.WriteAllText(urlFilePath, listenUrl);
 
-            stream.Flush(flushToDisk: true);
-
-            InstanceLock acquired = new(stream, lockFilePath);
+            InstanceLock acquired = new(stream, lockFilePath, urlFilePath);
             stream = null;
             return Result<InstanceLock, string>.Success(acquired);
         }
@@ -72,16 +76,29 @@ internal sealed class InstanceLock : IDisposable
         }
     }
 
-    public void Dispose() => _stream.Dispose();
-
-    private static string ReadRunningUrl(string lockFilePath)
+    public void Dispose()
     {
         try
         {
-            // The holder opened the file delete-on-close, so a reader must share Delete as well.
-            using FileStream reader = new(lockFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            using StreamReader text = new(reader);
-            string url = text.ReadToEnd().Trim();
+            File.Delete(_urlFilePath);
+        }
+        catch (IOException)
+        {
+            // A stale URL file only ever names an address that stops answering; the lock decides.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Same: the next instance overwrites it.
+        }
+
+        _stream.Dispose();
+    }
+
+    private static string ReadRunningUrl(string urlFilePath)
+    {
+        try
+        {
+            string url = File.ReadAllText(urlFilePath).Trim();
             return url.Length == 0 ? "an unknown address" : url;
         }
         catch (IOException)
