@@ -117,7 +117,7 @@ real page, real files, and real `claude auth status`, before any quota or rankin
 one remaining feasibility unknown (the login mechanism, design thread T8) is gated by a throwaway
 spike inside Phase 4, not by a phase of its own.
 
-### Phase 0: Repository, toolchain, and first vertical test [DOING]
+### Phase 0: Repository, toolchain, and first vertical test [DONE]
 
 Review: architecture
 
@@ -126,15 +126,18 @@ analyzer posture, with one real behavior under test so the test lane is proven b
 
 **Human-run steps** (the user's own deploys; the implementer prepares the diffs and stops):
 
-- [x] **0.1** (PR prepared 2026-09-05: github-iac#405, awaiting the user's `pulumi up`. Deviation
+- [x] **0.1** (github-iac#405 merged 2026-09-05 as `7bc660c`; `pulumi up` applied the same day: four
+  resources created, three custom-property defaults re-asserted. Deviation
   recorded: `RequiresSecurityReview` and `UsesClaudeReview` are **false** at creation, not true as
   written below, because the synced `components/claude-lanes/` callers name the private fleet's
   runner label and runner-policy refuses them on a public repository; hosted callers arrive by
   repo-local PR and both flags flip in the same change as `RequiresCi`, Phase 5.5.) In `melodic-software/github-iac`, add a `GovernedRepositorySpec` entry
   `new("account-rotation", a => { a.Description = "Machine-wide Claude Max account switching and quota dashboard for Claude Code: parked credential pairs, one live config dir, no browser step."; a.Visibility = "public"; a.Topics = new[] { "claude-code", "dotnet", "csharp", "windows", "developer-tools" }; a.AutoInit = true; a.SecurityAndAnalysis = SecretScanning("enabled"); }, RequiresCi: false, RequiresSecurityReview: true, UsesClaudeReview: true, VulnerabilityAlerts: true, DependabotSecurityUpdates: true)`.
-  `RequiresCi` stays false until the four ci-gate callers land (Phase 5), per the record's own comment.
+  `RequiresCi` stays false until `main` emits the org's `ci-status` context (Phase 5); github-iac#409
+  folded the four ci-gate callers into that single context after this item was written.
   Open the PR; the user runs `pulumi preview` and `pulumi up`.
-- [x] **0.2** (PR prepared 2026-09-05: standards#528, to merge after the App grant. Deviations
+- [x] **0.2** (standards#528 merged 2026-09-05 as `fdac203` after the App grant; the first sync PR,
+  account-rotation#1, merged the same day as `89afad3` and now owns `eng/dotnet-analysis/`. Deviations
   recorded: the two `claude-*-caller` components are **excluded** (private-only, see 0.1);
   `managed-files-guard-caller` and `typos` are **included** (every public hosted-only target carries
   both); `automerge: false` until `requires-ci` flips, since an armed sync PR would merge ungated.
@@ -145,7 +148,9 @@ analyzer posture, with one real behavior under test so the test lane is proven b
   `claude-review-caller, claude-security-review-caller, cloud-bootstrap, dotnet-analysis, editorconfig-checker, gitleaks, lefthook-base, lefthook-dotnet, lychee, markdownlint, node-runtime, pr-body-contract-rule, repository-text, review-instructions, shellcheck`.
   The user grants the repository in the `melodic-standards-sync` App installation UI **before** the
   manifest merge (github-iac README "Add an existing organization repository" order), then merges.
-- [ ] **0.3** Clone the new repo beside the other org checkouts (`<local-repos>/melodic-software/account-rotation`)
+- [x] **0.3** (2026-09-05: `git remote add` plus a rebase onto the AutoInit commit `afb674d`, which
+  carried only a two-line README; the skeleton landed as account-rotation#2, squash `5a2a657`, after
+  one Codex finding on the path gate was fixed in the same PR.) Clone the new repo beside the other org checkouts (`<local-repos>/melodic-software/account-rotation`)
   and move the contract slice in: copy `<spike-dir>/docs/topics/claude-subscription-rotation/` to
   `docs/topics/claude-subscription-rotation/`, and move `<spike-dir>/.work/` to `<repo>/.work/` (its
   self-ignoring `.gitignore` travels with it; nothing under `.work/` is staged). Before the first
@@ -208,6 +213,9 @@ analyzer posture, with one real behavior under test so the test lane is proven b
 - `bash eng/check-no-machine-paths.sh` exit 0.
 - `git -C <repo> status --porcelain | grep -c "^?? .work"` prints `0` (memory tier never staged).
 - `gh pr list -R melodic-software/account-rotation --state merged --search "chore: sync standards"` shows ≥ 1 merged sync PR (may land after 0.4; not a blocker for Phase 1).
+- Run 2026-09-05 after #1 and #2 merged: all six pass (`PUBLIC mit`; 9 tests on the skeleton and 115
+  on the Phase 1 branch; `eng/dotnet-analysis/` blobs on `main` identical to the sync's; `.work`
+  never staged; one merged sync PR).
 
 ### Phase 1: Tracer bullet, machine-wide switch through the page [DOING]
 
@@ -520,8 +528,9 @@ One executable, a config template, one login, working dashboard on a fresh Windo
   public OAuth `client_id`; running the loop lanes (`work-loop`, `babysit-loop`, `attend-queue`)
   while rotating accounts is outside V1 because reader-side invalidation of a latched window is
   still #1218's open half.
-- [ ] **5.4** Flip `RequiresCi: true` in github-iac once the four ci-gate callers are on `main`
-  (human-run `pulumi up`).
+- [ ] **5.4** Flip `RequiresCi: true` in github-iac once `main` emits the org's `ci-status` context
+  (github-iac#409 folded the four ci-gate callers into that single context; the pr-contract
+  composite runs as its steps) (human-run `pulumi up`).
 - [ ] **5.5** Laptop install (human): follow the README on the laptop; reach a working dashboard
   with one login and no code edit; set `profilesRoot` to a non-default writable directory and confirm
   it is honored.
