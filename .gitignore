@@ -1,0 +1,28 @@
+# .NET build output
+bin/
+obj/
+TestResults/
+*.trx
+publish/
+
+# IDE and per-user files
+.vs/
+.idea/
+*.user
+*.suo
+*.swp
+
+# Session memory tier (belt and braces beside its own self-ignoring .gitignore)
+.work/
+
+# Repo-local .NET SDK installed by the cloud bootstrap on a fresh VM
+.dotnet/
+
+# Node: the pinned markdownlint-cli2 and lefthook dev dependencies (standards sync)
+node_modules/
+
+# Lefthook per-developer override config
+lefthook-local.yml
+
+# Claude Code worktrees
+.claude/worktrees/

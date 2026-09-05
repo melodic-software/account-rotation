@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The executable: Kestrel on loopback, minimal API, embedded page. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>AccountRotation.App</RootNamespace>
+    <AssemblyName>account-rotation</AssemblyName>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../AccountRotation.Core/AccountRotation.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- WebApplicationFactory<Program> hosts the app in-process; the implicit
+         top-level Program type stays internal. -->
+    <InternalsVisibleTo Include="AccountRotation.App.Tests" />
+  </ItemGroup>
+
+</Project>

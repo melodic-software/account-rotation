@@ -1,0 +1,17 @@
+<Project>
+  <!-- Test-project boilerplate, late-bound on IsTestProject (set in each
+       *.Tests.csproj, which is evaluated after Directory.Build.props):
+       OutputType=Exe is the xUnit v3 Microsoft.Testing.Platform entry point;
+       Microsoft.NET.Test.Sdk is intentionally absent under that runner. -->
+  <PropertyGroup Condition="'$(IsTestProject)' == 'true'">
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(IsTestProject)' == 'true'">
+    <PackageReference Include="Shouldly" />
+    <PackageReference Include="xunit.v3.mtp-v2" />
+    <Using Include="Shouldly" />
+    <Using Include="Xunit" />
+  </ItemGroup>
+</Project>
