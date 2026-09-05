@@ -276,9 +276,22 @@ internal sealed partial class LiveDirectorySwitch
 
         if (liveFingerprint is null && outgoingParked && incomingStillParked && entry.OutgoingFolderPath is string parkedFolder)
         {
-            // Parked but never unparked: put the outgoing pair back, which restores the pre-switch state.
-            await _pairs.MoveParkedToLiveAsync(parkedFolder, cancellationToken);
-            await _journal.ClearAsync(cancellationToken);
+            // Parked but never unparked: put the outgoing pair back, which restores the pre-switch
+            // state. The move runs inside Claude Code's refresh lock like every other credential
+            // move, so a session refreshing its cached pair cannot replace the restored file.
+            Result<IAsyncDisposable, string> held = await _pairs.AcquireRefreshLockAsync(_options.RefreshLockWaitBound, cancellationToken);
+            if (held.IsFailure)
+            {
+                LogReconciled("deferred", entry.Outgoing?.Value ?? "(none)");
+                return ("the switch to " + entry.Incoming.Value + " is parked but not unwound yet: " + held.Error + "; restart once the session's refresh has finished", true);
+            }
+
+            await using (held.Value)
+            {
+                await _pairs.MoveParkedToLiveAsync(parkedFolder, cancellationToken);
+                await _journal.ClearAsync(cancellationToken);
+            }
+
             LogReconciled("unwound", entry.Outgoing?.Value ?? "(none)");
             return ("unwound the switch; " + (entry.Outgoing?.Value ?? "the previous pair") + " is live again", false);
         }

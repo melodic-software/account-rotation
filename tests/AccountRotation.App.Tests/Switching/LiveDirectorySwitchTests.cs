@@ -215,6 +215,30 @@ public sealed class LiveDirectorySwitchTests : IDisposable
     }
 
     [Fact]
+    public async Task AnUnwindWaitsForTheRefreshLockAndMovesNothingWhileASessionHoldsIt()
+    {
+        // Same half-done switch as above, but a session is mid-refresh: the restore must not
+        // race it, so reconciliation reports the block and leaves every file where it is.
+        await WriteStateFileAsync("a@example.com");
+        string folderA = await ParkedProfileAsync("a@example.com", "refresh-a");
+        string folderB = await ParkedProfileAsync("b@example.com", "refresh-b");
+        SwitchJournal journal = new(_appData);
+        await journal.WriteAsync(new SwitchJournalEntry(
+            Email("a@example.com"), CredentialFiles.Pair("refresh-a").Fingerprint, folderA,
+            Email("b@example.com"), CredentialFiles.Pair("refresh-b").Fingerprint, folderB,
+            SwitchStep.Parked, DateTimeOffset.UtcNow), TestContext.Current.CancellationToken);
+        Directory.CreateDirectory(Path.Combine(_liveDirectory, OAuthRefreshLock.DirectoryName));
+
+        ReconciliationReport report = await Switch(lockWait: TimeSpan.FromMilliseconds(300)).ReconcileAsync(TestContext.Current.CancellationToken);
+
+        report.SwitchingBlocked.ShouldBeTrue();
+        report.JournalOutcome.ShouldContain("not unwound yet");
+        (await CredentialFiles.FingerprintAsync(_liveDirectory, TestContext.Current.CancellationToken)).ShouldBeNull();
+        (await CredentialFiles.FingerprintAsync(folderA, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
+        (await journal.ReadOpenAsync(TestContext.Current.CancellationToken)).ShouldNotBeNull();
+    }
+
+    [Fact]
     public async Task ConcurrentSwitchesSerializeAndLeaveOneHolderPerLineage()
     {
         await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
