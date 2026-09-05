@@ -8,7 +8,7 @@ namespace AccountRotation.App.Adapters.Process;
 /// <summary>
 /// Runs <c>claude auth status --json</c> with an argument list (never a joined
 /// command line), optionally under <c>CLAUDE_CONFIG_DIR</c>, and kills the
-/// process at the timeout. A non-zero exit, a timeout, or unparseable output
+/// process at the timeout. A non-zero exit, a timeout, or unparsable output
 /// is a failure carrying the diagnostic text.
 /// </summary>
 internal sealed class ClaudeCliProcessAuthStatus : IClaudeCliAuthStatus
