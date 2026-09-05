@@ -16,6 +16,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The page ships inside the executable; no build step, no files beside it. -->
+    <EmbeddedResource Include="wwwroot\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="../AccountRotation.Core/AccountRotation.Core.csproj" />
   </ItemGroup>
 

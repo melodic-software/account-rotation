@@ -9,3 +9,10 @@ is_global = true
 # no synchronization context to capture, so the call is noise everywhere in
 # this solution. The org's medley application records the same relaxation.
 dotnet_diagnostic.CA2007.severity = none
+
+# CA2025 (disposables passed into unawaited tasks): the analyzer itself throws a
+# NullReferenceException (AD0001) over this solution's minimal-API lambdas with
+# the SDK's bundled analyzer build, which the warnings-as-errors posture turns
+# into a failed compile. Off until the bundled analyzer no longer crashes; the
+# rule's concern is covered by the CA2000 disposal analysis that stays on.
+dotnet_diagnostic.CA2025.severity = none

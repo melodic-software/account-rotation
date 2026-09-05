@@ -152,7 +152,8 @@ public sealed class ConfigurationTests : IDisposable
         StartupArguments.Parse(["--version"]).Value.ShowVersion.ShouldBeTrue();
         StartupArguments.Parse(["--help"]).Value.ShowHelp.ShouldBeTrue();
         StartupArguments.Parse(["--port", "abc"]).IsFailure.ShouldBeTrue();
-        StartupArguments.Parse(["--bogus"]).IsFailure.ShouldBeTrue();
+        // Unknown arguments belong to the host (and a test runner passes its own), so they pass through.
+        StartupArguments.Parse(["--results-directory", "x", "--port", "5002"]).Value.Port.ShouldBe(5002);
     }
 
     public void Dispose()

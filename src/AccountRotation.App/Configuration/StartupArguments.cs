@@ -45,7 +45,9 @@ internal sealed record StartupArguments(string? ConfigPath, int? Port, bool Show
                     showHelp = true;
                     break;
                 default:
-                    return Result<StartupArguments, string>.Failure("unrecognized argument: " + arguments[index] + "\n" + Usage);
+                    // Anything else is the host's: WebApplication.CreateBuilder reads --key value
+                    // pairs into configuration, and a test host passes its own runner arguments.
+                    break;
             }
         }
 
