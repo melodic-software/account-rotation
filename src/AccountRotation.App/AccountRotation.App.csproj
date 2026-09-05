@@ -6,6 +6,9 @@
     <RootNamespace>AccountRotation.App</RootNamespace>
     <AssemblyName>account-rotation</AssemblyName>
     <IsPackable>false</IsPackable>
+    <!-- LibraryImport's generated string marshalling for the exclusive-mkdir
+         P/Invokes behind the refresh lock. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
