@@ -14,6 +14,7 @@ namespace AccountRotation.App.Adapters.FileSystem;
 internal sealed class ClaudeStateFile
 {
     private const string AccountPropertyName = "oauthAccount";
+    private const int MaxPatchAttempts = 5;
 
     public ClaudeStateFile(string path)
     {
@@ -42,23 +43,45 @@ internal sealed class ClaudeStateFile
     }
 
     /// <summary>
-    /// Re-reads the file immediately before writing, so a session's own rewrite
-    /// of an unrelated key between the caller's read and this patch is kept.
+    /// Patches against the bytes on disk at the moment of writing: the file is
+    /// read, patched, and replaced only if its length and last-write time are
+    /// still those of the read, so a session's own rewrite of an unrelated key
+    /// during the patch is re-read and kept rather than overwritten with stale
+    /// bytes. A file that keeps changing across <see cref="MaxPatchAttempts"/>
+    /// attempts fails the patch instead of guessing; the journal then completes
+    /// it at the next startup.
     /// </summary>
     public async Task PatchAccountBlockAsync(OAuthAccountBlock account, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(account);
-        byte[] original = File.Exists(Path)
-            ? await File.ReadAllBytesAsync(Path, cancellationToken)
-            : Encoding.UTF8.GetBytes("{}");
         byte[] value = JsonSerializer.SerializeToUtf8Bytes(account.Raw);
 
-        AccountSpan? span = LocateAccountValue(original);
-        byte[] patched = span is AccountSpan existing
-            ? Splice(original, existing.Start, existing.Length, value)
-            : AppendProperty(original, value);
+        for (int attempt = 1; attempt <= MaxPatchAttempts; attempt++)
+        {
+            Stamp before = ReadStamp();
+            byte[] original = before.Exists
+                ? await File.ReadAllBytesAsync(Path, cancellationToken)
+                : Encoding.UTF8.GetBytes("{}");
 
-        await AtomicBytesFile.WriteAsync(Path, patched, cancellationToken);
+            AccountSpan? span = LocateAccountValue(original);
+            byte[] patched = span is AccountSpan existing
+                ? Splice(original, existing.Start, existing.Length, value)
+                : AppendProperty(original, value);
+
+            if (ReadStamp() == before)
+            {
+                await AtomicBytesFile.WriteAsync(Path, patched, cancellationToken);
+                return;
+            }
+        }
+
+        throw new IOException("The state file " + Path + " kept changing while the account block was being patched; the switch is journaled and completes at the next startup.");
+    }
+
+    private Stamp ReadStamp()
+    {
+        FileInfo info = new(Path);
+        return info.Exists ? new Stamp(true, info.Length, info.LastWriteTimeUtc) : new Stamp(false, 0, DateTime.MinValue);
     }
 
     private static AccountSpan? LocateAccountValue(byte[] bytes)
@@ -124,4 +147,6 @@ internal sealed class ClaudeStateFile
     }
 
     private readonly record struct AccountSpan(int Start, int Length);
+
+    private readonly record struct Stamp(bool Exists, long Length, DateTime LastWriteUtc);
 }
