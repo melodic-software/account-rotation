@@ -154,7 +154,10 @@ analyzer posture, with one real behavior under test so the test lane is proven b
 
 **Implementer steps** (branch `feat/solution-skeleton`):
 
-- [ ] **0.4** Solution skeleton per `design/library-topology.md`: `AccountRotation.slnx`,
+- [x] **0.4** (2026-09-05; `Microsoft.Extensions.Http` is not pinned: the framework reference already
+  carries the HTTP factory; a repository `.globalconfig` relaxes CA2007 for the Kestrel host; the App
+  test project carries a `GET /healthz` round trip because the platform fails a zero-test project.)
+  Solution skeleton per `design/library-topology.md`: `AccountRotation.slnx`,
   `global.json` (SDK `10.0.400`, `rollForward: disable`, `test.runner: Microsoft.Testing.Platform`),
   `Directory.Build.props` importing `eng/dotnet-analysis/Directory.Build.props` with
   `TargetFramework net10.0`, `Directory.Packages.props` pinning `Microsoft.Extensions.Http`,
@@ -165,14 +168,16 @@ analyzer posture, with one real behavior under test so the test lane is proven b
   `README.md` (tagline "Account switching and quota dashboard for Claude Code"), `CHANGELOG.md`.
   Until the standards sync PR lands, vendor `eng/dotnet-analysis/` byte-identical from the standards
   checkout so the build posture is strict from the first commit; the sync then owns the files.
-- [ ] **0.5** First red-green vertical: `ProfileFolderName.FromEmail` (Core) with tests for every
+- [x] **0.5** (2026-09-05, eight cases green, one rule per red-green cycle.) First red-green vertical: `ProfileFolderName.FromEmail` (Core) with tests for every
   rule in the Brief's sanitizer (forbidden characters, control characters, trailing dots and spaces,
   lowercasing, empty → `unknown`). This proves the analyzer posture, the test runner, and the CI lane
   on real behavior rather than a placeholder.
-- [ ] **0.6** `.github/workflows/ci.yml`: restore (locked mode), build, test on `windows-latest` and
+- [x] **0.6** (2026-09-05; the images are the org's explicit labels `ubuntu-24.04` and `windows-2025`;
+  the user-name half of the gate reads `CHECK_NO_MACHINE_PATHS_NAMES` so the name itself never
+  enters the public tree.) `.github/workflows/ci.yml`: restore (locked mode), build, test on `windows-latest` and
   `ubuntu-latest`; `eng/check-no-machine-paths.sh` (fails on `[A-Za-z]:\\`, `\\Users\\`, `/home/`,
   or the operator's user name anywhere under `src/`, `tests/`, `README.md`, `config.template.json`).
-- [ ] **0.7** `.gitignore` for .NET plus `.work/` (belt and braces beside the tier's own self-ignore).
+- [x] **0.7** (2026-09-05) `.gitignore` for .NET plus `.work/` (belt and braces beside the tier's own self-ignore).
 
 **File inventory (Phase 0, new repo):**
 
@@ -180,20 +185,20 @@ analyzer posture, with one real behavior under test so the test lane is proven b
 |---|---|---|
 | [x] `github-iac/GovernedRepositories.cs` | MODIFY | new governed repo entry (0.1) |
 | [x] `standards/distribution/sync-manifest.yml` | MODIFY | new sync target (0.2) |
-| [ ] `AccountRotation.slnx` | CREATE | solution |
-| [ ] `global.json` | CREATE | SDK pin, MTP runner |
-| [ ] `Directory.Build.props` | CREATE | imports analysis overlay, TFM |
-| [ ] `Directory.Packages.props` | CREATE | central versions |
-| [ ] `eng/dotnet-analysis/Directory.Build.props`, `eng/dotnet-analysis/dotnet.globalconfig` | CREATE (vendored, then sync-owned) | strict posture |
-| [ ] `eng/check-no-machine-paths.sh` | CREATE | AC 8 grep gate |
-| [ ] `src/AccountRotation.Core/AccountRotation.Core.csproj` | CREATE | BCL-only project |
-| [ ] `src/AccountRotation.Core/Identity/ProfileFolderName.cs` | CREATE | sanitizer (0.5) |
-| [ ] `src/AccountRotation.App/AccountRotation.App.csproj`, `Program.cs` | CREATE | exe stub that starts Kestrel on loopback and serves `GET /healthz` |
-| [ ] `tests/AccountRotation.Core.Tests/*.csproj`, `Identity/ProfileFolderNameTests.cs` | CREATE | first tests |
-| [ ] `tests/AccountRotation.App.Tests/*.csproj` | CREATE | empty project compiles |
-| [ ] `.github/workflows/ci.yml` | CREATE | build, test, path gate |
-| [ ] `LICENSE`, `README.md`, `CHANGELOG.md`, `.gitignore` | CREATE | repo hygiene |
-| [ ] `docs/topics/claude-subscription-rotation/**` | MOVE | contract slice from the spike dir |
+| [x] `AccountRotation.slnx` | CREATE | solution |
+| [x] `global.json` | CREATE | SDK pin, MTP runner |
+| [x] `Directory.Build.props` | CREATE | imports analysis overlay, TFM |
+| [x] `Directory.Packages.props` | CREATE | central versions |
+| [x] `eng/dotnet-analysis/Directory.Build.props`, `eng/dotnet-analysis/dotnet.globalconfig` | CREATE (vendored, then sync-owned) | strict posture |
+| [x] `eng/check-no-machine-paths.sh` | CREATE | AC 8 grep gate |
+| [x] `src/AccountRotation.Core/AccountRotation.Core.csproj` | CREATE | BCL-only project |
+| [x] `src/AccountRotation.Core/Identity/ProfileFolderName.cs` | CREATE | sanitizer (0.5) |
+| [x] `src/AccountRotation.App/AccountRotation.App.csproj`, `Program.cs` | CREATE | exe stub that starts Kestrel on loopback and serves `GET /healthz` |
+| [x] `tests/AccountRotation.Core.Tests/*.csproj`, `Identity/ProfileFolderNameTests.cs` | CREATE | first tests |
+| [x] `tests/AccountRotation.App.Tests/*.csproj` | CREATE | empty project compiles (carries the healthz test, see 0.4) |
+| [x] `.github/workflows/ci.yml` | CREATE | build, test, path gate |
+| [x] `LICENSE`, `README.md`, `CHANGELOG.md`, `.gitignore` | CREATE | repo hygiene |
+| [x] `docs/topics/claude-subscription-rotation/**` | MOVE | contract slice from the spike dir |
 
 **Sanity Check:**
 

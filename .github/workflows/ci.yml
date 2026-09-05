@@ -1,0 +1,61 @@
+name: ci
+
+# Build, test, and gate on every pull request and on main. The org's ci-gate
+# contexts (ci-status and the three pull-request contract callers) arrive with
+# the standards sync and the release phase; until then this workflow is the
+# whole lane.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Build and test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+      - name: Restore (locked mode)
+        run: dotnet restore AccountRotation.slnx --locked-mode
+      - name: Build
+        run: dotnet build AccountRotation.slnx -c Release --no-restore
+      - name: Test
+        run: dotnet test AccountRotation.slnx -c Release --no-build
+      - name: Whitespace format
+        run: dotnet format whitespace AccountRotation.slnx --verify-no-changes
+
+  gates:
+    name: Repository gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # shellcheck is preinstalled on the ubuntu-24.04 image.
+      - name: shellcheck (zero findings)
+        run: shellcheck eng/*.sh
+      - name: No machine paths in shipped surfaces
+        run: bash eng/check-no-machine-paths.sh
