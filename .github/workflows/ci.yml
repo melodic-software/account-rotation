@@ -1,8 +1,8 @@
 name: ci
 
 # Build, test, and gate on every pull request and on main. The org's ci-gate
-# contexts (ci-status and the three pull-request contract callers) arrive with
-# the standards sync and the release phase; until then this workflow is the
+# context (ci-status, whose pr-contract composite carries the pull-request
+# contract) arrives in the release phase; until then this workflow is the
 # whole lane.
 
 on:
