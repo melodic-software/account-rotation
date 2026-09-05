@@ -233,7 +233,9 @@ Behavioral reference: `spike-04-swap.py` (memory slice), guard for guard.
   the inventory's parameters plus the profiles root and the live lineage's recorded owner;
   `LiveIdentityUnverified` is checked **first**, since an unreconciled switch invalidates every
   other answer including `AlreadyOnTarget`; a tenth refusal `MutationInProgress` is the executor's
-  answer to a second concurrent switch, the plan's 409.) `SwitchPlanner.Plan` (pure) with the `SwitchRefusal` cases in spike 04's order plus
+  answer to a second concurrent switch, the plan's 409. Review on #3, 2026-09-05: a live pair whose
+  account the state file does not name is refused `LiveIdentityUnverified` rather than planned with
+  `Outgoing = null`, because the unpark would fail onto the live file with the journal open.) `SwitchPlanner.Plan` (pure) with the `SwitchRefusal` cases in spike 04's order plus
   three the review added: `TargetLoginExpired` (parked `refreshTokenExpiresAt` in the past),
   `SwitchingBlockedByManagedPolicy` (a device-managed `forceLoginOrgUUID` is in effect), and
   `LiveIdentityUnverified` (an open switch journal, or a state-file account that does not match the
@@ -251,7 +253,12 @@ Behavioral reference: `spike-04-swap.py` (memory slice), guard for guard.
   `ForceLoginOrgUuid`).
 - [x] **1.4** (2026-09-05; `AtomicBytesFile` is the byte-level half the state-file splice uses, the
   JSON writer serializes through it; the live-dir cross-check against `projectsDirectory` is not
-  wired yet, it joins the dashboard warnings when the CLI status is read at startup in Phase 2.)
+  wired yet, it joins the dashboard warnings when the CLI status is read at startup in Phase 2.
+  Review on #3, 2026-09-05: the state-file patch stamps the file (existence, length, last-write
+  time) before the read and after the splice and writes only when the stamps agree, five attempts,
+  else it fails with the journal open for startup to complete; the volume check resolves the owning
+  mount point outside Windows, where a `DriveInfo` built from a path names the path itself and had
+  every configuration refused on the Ubuntu lane.)
   App concrete file classes: `AtomicJsonFile` (temp file in the target directory,
   created with `UnixCreateMode` 0600 on non-Windows, `Flush(true)`, then `File.Replace` when the
   target exists or `File.Move` when it does not; retry a sharing violation with jittered backoff from
@@ -296,7 +303,11 @@ Behavioral reference: `spike-04-swap.py` (memory slice), guard for guard.
   refresh client; a crash after the park and before the unpark is **unwound** (the outgoing pair
   restored) rather than completed, the least surprising outcome for the user; the live lineage's
   owner is recorded in `<appdata>/state/live-owner.json`; the mutation gate wait for a switch is
-  zero, so a second switch is the 409 immediately.) `LiveDirectorySwitch` under the `CredentialMutationGate` (one `SemaphoreSlim(1, 1)`
+  zero, so a second switch is the 409 immediately. Review on #3, 2026-09-05: the unwind acquires the
+  refresh lock like every other credential move and reports a block, moving nothing, while a session
+  holds it; the instance lock opens `instance.lock` with `FileShare.None` and publishes the URL in a
+  sibling `instance.url`, delete-on-close on Windows only, because .NET on Unix unlinks the path at
+  open and a second instance was starting on the Ubuntu lane.) `LiveDirectorySwitch` under the `CredentialMutationGate` (one `SemaphoreSlim(1, 1)`
   every credential-touching operation acquires with a timeout and releases in `finally`; a second
   concurrent switch gets 409) and the `InstanceLock` (an owner-only lock file under app data; a
   second instance refuses to start and prints the running instance's URL): snapshot live state →
