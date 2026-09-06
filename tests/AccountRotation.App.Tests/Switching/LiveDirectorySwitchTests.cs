@@ -47,9 +47,9 @@ public sealed class LiveDirectorySwitchTests : IDisposable
         return folder;
     }
 
-    private LiveDirectorySwitch Switch(TimeSpan? lockWait = null, bool patchStateFile = true, TimeSpan? gateTimeout = null, ICredentialPairStore? pairs = null)
+    private LiveDirectorySwitch Switch(TimeSpan? lockWait = null, TimeSpan? gateTimeout = null, ICredentialPairStore? pairs = null)
     {
-        SwitchOptions options = new(_liveDirectory, _stateFilePath, _profilesRoot, _appData, lockWait ?? TimeSpan.FromSeconds(2), gateTimeout ?? TimeSpan.FromMilliseconds(200), patchStateFile);
+        SwitchOptions options = new(_liveDirectory, _stateFilePath, _profilesRoot, _appData, lockWait ?? TimeSpan.FromSeconds(2), gateTimeout ?? TimeSpan.FromMilliseconds(200));
         return new LiveDirectorySwitch(
             pairs ?? new FileSystemCredentialPairStore(_liveDirectory, _profilesRoot, TimeProvider.System),
             new ClaudeStateFile(_stateFilePath),

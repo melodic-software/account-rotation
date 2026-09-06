@@ -78,8 +78,7 @@ internal static class AppComposition
             configuration.ProfilesRoot,
             configuration.AppDataDirectory,
             configuration.RefreshLockWaitBound,
-            MutationGateTimeout: TimeSpan.Zero,
-            configuration.PatchStateFile));
+            MutationGateTimeout: TimeSpan.Zero));
         services.AddSingleton<ICredentialPairStore>(new FileSystemCredentialPairStore(configuration.LiveConfigDirectory, configuration.ProfilesRoot, TimeProvider.System));
         services.AddSingleton(new ClaudeStateFile(configuration.StateFilePath));
         services.AddSingleton(new ProfileFolderStore(configuration.ProfilesRoot));

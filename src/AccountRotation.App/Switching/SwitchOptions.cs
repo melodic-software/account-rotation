@@ -7,8 +7,7 @@ internal sealed record SwitchOptions(
     string ProfilesRoot,
     string AppDataDirectory,
     TimeSpan RefreshLockWaitBound,
-    TimeSpan MutationGateTimeout,
-    bool PatchStateFile);
+    TimeSpan MutationGateTimeout);
 
 /// <summary>What startup or pre-plan reconciliation found and did.</summary>
 internal sealed record ReconciliationReport(

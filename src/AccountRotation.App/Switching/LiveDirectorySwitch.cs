@@ -172,11 +172,11 @@ internal sealed partial class LiveDirectorySwitch
             await _pairs.MoveParkedToLiveAsync(plan.IncomingFolderPath, committed);
             await _journal.WriteAsync(entry with { StepReached = SwitchStep.Unparked }, committed);
 
-            if (_options.PatchStateFile)
-            {
-                await _stateFile.PatchAccountBlockAsync(plan.IncomingAccount, committed);
-                await _journal.WriteAsync(entry with { StepReached = SwitchStep.Patched }, committed);
-            }
+            // The CLI never re-stamps oauthAccount on an ordinary request (probe 1.5a), so
+            // the patch is unconditional: without it every session keeps naming the
+            // outgoing account and the tool cannot plan the next switch.
+            await _stateFile.PatchAccountBlockAsync(plan.IncomingAccount, committed);
+            await _journal.WriteAsync(entry with { StepReached = SwitchStep.Patched }, committed);
 
             await WriteLiveOwnerAsync(targetCredentials.Fingerprint, plan.Incoming, committed);
             await _journal.ClearAsync(committed);
@@ -278,19 +278,16 @@ internal sealed partial class LiveDirectorySwitch
         if (unparkFinished && liveFingerprint is RefreshTokenFingerprint liveNow)
         {
             // The unpark happened; only the patch, the owner record, and the clear may be missing.
-            if (_options.PatchStateFile)
+            OAuthAccountBlock? current = await _stateFile.ReadAccountBlockAsync(cancellationToken);
+            if (current?.Email != entry.Incoming)
             {
-                OAuthAccountBlock? current = await _stateFile.ReadAccountBlockAsync(cancellationToken);
-                if (current?.Email != entry.Incoming)
+                OAuthAccountBlock? incomingAccount = await _profiles.ReadAccountAsync(incomingFolder, cancellationToken);
+                if (incomingAccount is null)
                 {
-                    OAuthAccountBlock? incomingAccount = await _profiles.ReadAccountAsync(incomingFolder, cancellationToken);
-                    if (incomingAccount is null)
-                    {
-                        return ("the unpark of " + entry.Incoming.Value + " completed but its account block is missing from " + incomingFolder + ", so the state file was not patched", true);
-                    }
-
-                    await _stateFile.PatchAccountBlockAsync(incomingAccount, cancellationToken);
+                    return ("the unpark of " + entry.Incoming.Value + " completed but its account block is missing from " + incomingFolder + ", so the state file was not patched", true);
                 }
+
+                await _stateFile.PatchAccountBlockAsync(incomingAccount, cancellationToken);
             }
 
             await WriteLiveOwnerAsync(liveNow, entry.Incoming, cancellationToken);

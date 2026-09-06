@@ -37,7 +37,6 @@ internal static class ConfigurationDefaults
             DefaultListenPort,
             DefaultRefreshLockWaitBound,
             ClaudeExecutable: null,
-            PatchStateFile: true,
             ProductToken);
     }
 }

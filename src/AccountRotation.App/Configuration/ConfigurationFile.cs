@@ -58,7 +58,6 @@ internal static class ConfigurationFile
         ["listenPort"] = configuration.ListenPort,
         ["refreshLockWaitSeconds"] = configuration.RefreshLockWaitBound.TotalSeconds,
         ["claudeExecutable"] = configuration.ClaudeExecutable,
-        ["patchStateFile"] = configuration.PatchStateFile,
         ["userAgentProductToken"] = configuration.UserAgentProductToken,
     };
 
@@ -70,7 +69,6 @@ internal static class ConfigurationFile
         Number(raw, "listenPort") is double port ? (int)port : defaults.ListenPort,
         Number(raw, "refreshLockWaitSeconds") is double seconds ? TimeSpan.FromSeconds(seconds) : defaults.RefreshLockWaitBound,
         Text(raw, "claudeExecutable") ?? defaults.ClaudeExecutable,
-        Flag(raw, "patchStateFile") ?? defaults.PatchStateFile,
         Text(raw, "userAgentProductToken") ?? defaults.UserAgentProductToken);
 
     private static string? Text(JsonObject raw, string key) =>

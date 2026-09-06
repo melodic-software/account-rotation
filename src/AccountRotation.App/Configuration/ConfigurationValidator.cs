@@ -14,7 +14,10 @@ namespace AccountRotation.App.Configuration;
 internal static class ConfigurationValidator
 {
     private static readonly string[] _syncEnvironmentVariables = ["OneDrive", "OneDriveCommercial", "OneDriveConsumer"];
-    private static readonly string[] _syncFolderNames = ["OneDrive", "Dropbox", "Google Drive"];
+
+    // Matched as prefixes of the folder directly under the home directory, since the
+    // clients decorate the name: "OneDrive - Contoso", "Dropbox (Personal)", "My Drive".
+    private static readonly string[] _syncFolderPrefixes = ["OneDrive", "Dropbox", "Google Drive", "My Drive", "iCloudDrive", "iCloud Drive", "Box"];
 
     public static Result<Unit, string> Validate(
         AccountRotationConfiguration configuration,
@@ -41,27 +44,30 @@ internal static class ConfigurationValidator
             return Failure("the profiles root must be a folder of its own, not the home directory " + home);
         }
 
+        // Both roots that ever hold a credential file: the profiles root (parked pairs) and
+        // the app data directory (quarantined pairs). Each must share the live volume, since
+        // every move is a rename, and neither may sit under a sync folder.
+        string appData = Normalize(configuration.AppDataDirectory);
         string? liveVolume = volumeOf(live);
-        string? profilesVolume = volumeOf(profiles);
-        if (!string.Equals(liveVolume, profilesVolume, StringComparison.OrdinalIgnoreCase))
+        foreach ((string label, string root) in new[] { ("profiles root", profiles), ("app data directory", appData) })
         {
-            return Failure("the profiles root " + profiles + " (volume " + (profilesVolume ?? "?") + ") must sit on the same volume as the live config directory " + live + " (volume " + (liveVolume ?? "?") + "): credential pairs are moved by rename, never copied");
-        }
-
-        foreach (string variable in _syncEnvironmentVariables)
-        {
-            if (environment(variable) is string syncRoot && !string.IsNullOrWhiteSpace(syncRoot) && (Same(profiles, Normalize(syncRoot)) || Contains(Normalize(syncRoot), profiles)))
+            string? rootVolume = volumeOf(root);
+            if (!string.Equals(liveVolume, rootVolume, StringComparison.OrdinalIgnoreCase))
             {
-                return Failure("the profiles root " + profiles + " sits under the " + variable + " sync folder " + syncRoot + "; credentials must never be synced");
+                return Failure("the " + label + " " + root + " (volume " + (rootVolume ?? "?") + ") must sit on the same volume as the live config directory " + live + " (volume " + (liveVolume ?? "?") + "): credential pairs are moved by rename, never copied");
             }
-        }
 
-        foreach (string folderName in _syncFolderNames)
-        {
-            string syncRoot = Normalize(Path.Combine(home, folderName));
-            if (Same(profiles, syncRoot) || Contains(syncRoot, profiles))
+            foreach (string variable in _syncEnvironmentVariables)
             {
-                return Failure("the profiles root " + profiles + " sits under the " + folderName + " folder; credentials must never be synced");
+                if (environment(variable) is string syncRoot && !string.IsNullOrWhiteSpace(syncRoot) && (Same(root, Normalize(syncRoot)) || Contains(Normalize(syncRoot), root)))
+                {
+                    return Failure("the " + label + " " + root + " sits under the " + variable + " sync folder " + syncRoot + "; credentials must never be synced");
+                }
+            }
+
+            if (SyncFolderUnderHome(root, home) is string syncFolder)
+            {
+                return Failure("the " + label + " " + root + " sits under the " + syncFolder + " folder; credentials must never be synced");
             }
         }
 
@@ -116,6 +122,20 @@ internal static class ConfigurationValidator
         {
             return null;
         }
+    }
+
+    /// <summary>The name of the sync folder directly under the home directory that owns <paramref name="path"/>, or null.</summary>
+    private static string? SyncFolderUnderHome(string path, string home)
+    {
+        if (!Contains(home, path))
+        {
+            return null;
+        }
+
+        string firstSegment = path[(home.Length + 1)..].Split(Path.DirectorySeparatorChar, 2)[0];
+        return _syncFolderPrefixes.Any(prefix => firstSegment.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            ? firstSegment
+            : null;
     }
 
     private static string Normalize(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));

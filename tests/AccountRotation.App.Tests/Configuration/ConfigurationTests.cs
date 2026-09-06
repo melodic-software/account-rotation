@@ -30,7 +30,6 @@ public sealed class ConfigurationTests : IDisposable
         defaults.AppDataDirectory.ShouldBe(Path.Combine(_home, "AppData", "Local", "account-rotation"));
         defaults.ListenPort.ShouldBe(48211);
         defaults.RefreshLockWaitBound.ShouldBe(TimeSpan.FromSeconds(10));
-        defaults.PatchStateFile.ShouldBeTrue();
     }
 
     [Fact]
@@ -148,6 +147,46 @@ public sealed class ConfigurationTests : IDisposable
         AccountRotationConfiguration configuration = Defaults() with { ProfilesRoot = Path.Combine(_home, "Dropbox", "claude-profiles") };
 
         ConfigurationValidator.Validate(configuration, _home, static _ => "C:", static _ => null).Error.ShouldContain("Dropbox");
+    }
+
+    [Fact]
+    public void AnAppDataDirectoryOnAnotherVolumeIsRefused()
+    {
+        // Quarantined pairs move into app data by rename, which cannot cross a volume.
+        AccountRotationConfiguration configuration = Defaults();
+        string VolumeOf(string path) => path.StartsWith(configuration.AppDataDirectory, StringComparison.Ordinal) ? "E:" : "C:";
+
+        Result<Unit, string> verdict = ConfigurationValidator.Validate(configuration, _home, VolumeOf, static _ => null);
+
+        verdict.IsFailure.ShouldBeTrue();
+        verdict.Error.ShouldContain(configuration.AppDataDirectory);
+    }
+
+    [Fact]
+    public void AnAppDataDirectoryUnderASyncFolderIsRefused()
+    {
+        AccountRotationConfiguration configuration = Defaults() with { AppDataDirectory = Path.Combine(_home, "OneDrive", "account-rotation") };
+
+        Result<Unit, string> verdict = ConfigurationValidator.Validate(configuration, _home, static _ => "C:", static _ => null);
+
+        verdict.IsFailure.ShouldBeTrue();
+        verdict.Error.ShouldContain("OneDrive");
+    }
+
+    [Theory]
+    [InlineData("Dropbox (Personal)")]
+    [InlineData("OneDrive - Contoso")]
+    [InlineData("My Drive")]
+    [InlineData("iCloudDrive")]
+    [InlineData("Box")]
+    public void ASyncFolderIsRecognizedByItsPrefixWhateverTheSuffix(string folderName)
+    {
+        AccountRotationConfiguration configuration = Defaults() with { ProfilesRoot = Path.Combine(_home, folderName, "claude-profiles") };
+
+        Result<Unit, string> verdict = ConfigurationValidator.Validate(configuration, _home, static _ => "C:", static _ => null);
+
+        verdict.IsFailure.ShouldBeTrue();
+        verdict.Error.ShouldContain(folderName);
     }
 
     [Fact]

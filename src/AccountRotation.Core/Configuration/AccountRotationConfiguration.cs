@@ -13,5 +13,4 @@ public sealed record AccountRotationConfiguration(
     int ListenPort,
     TimeSpan RefreshLockWaitBound,
     string? ClaudeExecutable,
-    bool PatchStateFile,
     string UserAgentProductToken);
