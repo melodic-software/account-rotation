@@ -64,6 +64,18 @@ public sealed class CoordinationTests : IDisposable
         (await journal.ReadOpenAsync(TestContext.Current.CancellationToken)).ShouldBeNull();
     }
 
+    [Fact]
+    public async Task APermitReleasedAfterTheGateIsDisposedDoesNotThrow()
+    {
+        // At shutdown the container disposes the gate while a request aborted past the
+        // shutdown timeout may still be releasing its permit from a finally block.
+        CredentialMutationGate gate = new();
+        IDisposable permit = await gate.AcquireAsync(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
+        gate.Dispose();
+
+        Should.NotThrow(permit.Dispose);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_appData))

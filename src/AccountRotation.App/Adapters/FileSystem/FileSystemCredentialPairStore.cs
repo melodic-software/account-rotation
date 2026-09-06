@@ -177,7 +177,9 @@ internal sealed class FileSystemCredentialPairStore : ICredentialPairStore
         ArgumentException.ThrowIfNullOrWhiteSpace(folderPath);
         string full = Path.GetFullPath(folderPath);
         string relative = Path.GetRelativePath(_profilesRoot, full);
-        if (relative.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(relative) || relative == ".")
+        // The same rule as ProfileFolderStore.UnderRoot: one level below the root, never
+        // outside it and never deeper, so a request-built path cannot reach past the folders.
+        if (relative.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(relative) || relative == "." || relative.Contains(Path.DirectorySeparatorChar, StringComparison.Ordinal))
         {
             throw new ArgumentException("A profile folder must sit directly under the profiles root " + _profilesRoot + "; got " + full, nameof(folderPath));
         }

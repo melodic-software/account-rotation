@@ -151,6 +151,17 @@ public sealed class FileSystemCredentialPairStoreTests : IDisposable
         _store.FreshLockFileName(TimeSpan.FromSeconds(60)).ShouldBe("refresh.lock");
     }
 
+    [Fact]
+    public async Task ANestedPathUnderTheProfilesRootIsRefusedLikeThePathsOutsideIt()
+    {
+        // The profile store already refuses a path deeper than one level; the pair store
+        // must apply the same rule, or a request-built path reaches past the profile folders.
+        string nested = Path.Combine(_profilesRoot, "a", "b");
+
+        await Should.ThrowAsync<ArgumentException>(() => _store.ReadParkedAsync(nested, TestContext.Current.CancellationToken));
+        await Should.ThrowAsync<ArgumentException>(() => _store.ReadParkedAsync(Path.Combine(_root, "elsewhere"), TestContext.Current.CancellationToken));
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_root))

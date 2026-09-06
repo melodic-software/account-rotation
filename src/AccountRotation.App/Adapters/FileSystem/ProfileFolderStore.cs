@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json.Nodes;
 using AccountRotation.Core.Identity;
 
@@ -18,13 +19,16 @@ internal sealed class ProfileFolderStore
     private static readonly string[] _keptOnPrune = [FileSystemCredentialPairStore.FileName, ProfileFileName];
 
     private readonly string _profilesRoot;
-    private readonly HashSet<string> _discovered;
+
+    // A singleton mutated by every dashboard poll and every switch at once, so the
+    // set must be safe for concurrent adds and removes.
+    private readonly ConcurrentDictionary<string, byte> _discovered;
 
     public ProfileFolderStore(string profilesRoot)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(profilesRoot);
         _profilesRoot = Path.GetFullPath(profilesRoot);
-        _discovered = new HashSet<string>(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+        _discovered = new ConcurrentDictionary<string, byte>(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
     }
 
     public async Task<IReadOnlyList<ParkedProfile>> ListAsync(CancellationToken cancellationToken)
@@ -44,7 +48,7 @@ internal sealed class ProfileFolderStore
                 continue;
             }
 
-            _discovered.Add(folder);
+            _discovered[folder] = 0;
             profiles.Add(new ParkedProfile(email, folder, HasCredentials(folder), account));
         }
 
@@ -56,7 +60,7 @@ internal sealed class ProfileFolderStore
     {
         string folder = Path.Combine(_profilesRoot, ProfileFolderName.FromEmail(email));
         Directory.CreateDirectory(folder);
-        _discovered.Add(folder);
+        _discovered[folder] = 0;
         OAuthAccountBlock? account = await ReadAccountInFolderAsync(folder, cancellationToken);
         return new ParkedProfile(email, folder, HasCredentials(folder), account);
     }
@@ -71,13 +75,13 @@ internal sealed class ProfileFolderStore
     {
         cancellationToken.ThrowIfCancellationRequested();
         string folder = UnderRoot(folderPath);
-        if (!_discovered.Contains(folder))
+        if (!_discovered.ContainsKey(folder))
         {
             throw new InvalidOperationException("Refusing to delete " + folder + ": only a folder discovered by listing the profiles root can be deleted.");
         }
 
         Directory.Delete(folder, recursive: true);
-        _discovered.Remove(folder);
+        _discovered.TryRemove(folder, out _);
         return Task.CompletedTask;
     }
 

@@ -28,10 +28,20 @@ internal sealed class CredentialMutationGate : IDisposable
 
         public void Dispose()
         {
-            if (!_released)
+            if (_released)
             {
-                _released = true;
+                return;
+            }
+
+            _released = true;
+            try
+            {
                 permit.Release();
+            }
+            catch (ObjectDisposedException)
+            {
+                // The container disposed the gate at shutdown before this request's finally
+                // block ran; there is nothing left to release into.
             }
         }
     }
