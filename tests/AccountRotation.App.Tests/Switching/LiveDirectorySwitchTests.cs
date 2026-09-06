@@ -314,6 +314,27 @@ public sealed class LiveDirectorySwitchTests : IDisposable
         record["email"]!.GetValue<string>().ShouldBe("b@example.com");
     }
 
+    [Theory]
+    [InlineData("not json at all")]
+    [InlineData("""{"fingerprint": 12, "email": ["x"], "at": 5}""")]
+    [InlineData("""{"fingerprint": "0000", "email": "a@example.com", "at": 5}""")]
+    public async Task ACorruptOwnerRecordNeverFailsTheSwitch(string record)
+    {
+        // A hand-edited or truncated record reads as no recorded owner (or, when its strings are
+        // intact and name the live account, as a plain rotation); it never throws out of the switch.
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        await ParkedProfileAsync("b@example.com", "refresh-b");
+        Directory.CreateDirectory(Path.Combine(_appData, "state"));
+        await File.WriteAllTextAsync(Path.Combine(_appData, "state", "live-owner.json"), record, TestContext.Current.CancellationToken);
+        _cli.Email = "b@example.com";
+
+        Result<SwitchOutcome, SwitchRefusal> result = await Switch().SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken);
+
+        result.IsSuccess.ShouldBeTrue(result.IsFailure ? result.Error.ToString() : "");
+        (await CredentialFiles.FingerprintAsync(_liveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-b").Fingerprint);
+    }
+
     [Fact]
     public async Task AJournaledSwitchWhoseLivePairHasRotatedIsStillCompletedAtStartup()
     {
@@ -382,7 +403,12 @@ public sealed class LiveDirectorySwitchTests : IDisposable
     {
         public string? Email { get; set; }
 
-        public Task<Result<ClaudeAuthStatus, string>> ReadAsync(string? configDirectory, CancellationToken cancellationToken) =>
-            Task.FromResult(Result<ClaudeAuthStatus, string>.Success(new ClaudeAuthStatus(true, Email, "claude.ai", "Personal", "max", null)));
+        public Task<Result<ClaudeAuthStatus, string>> ReadAsync(string? configDirectory, CancellationToken cancellationToken)
+        {
+            // Like the real adapter, honor the token: a switch that verifies under an aborted
+            // request token would throw here instead of returning its outcome.
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(Result<ClaudeAuthStatus, string>.Success(new ClaudeAuthStatus(true, Email, "claude.ai", "Personal", "max", null)));
+        }
     }
 }

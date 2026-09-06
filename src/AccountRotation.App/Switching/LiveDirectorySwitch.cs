@@ -392,7 +392,8 @@ internal sealed partial class LiveDirectorySwitch
             return owner;
         }
 
-        DateTimeOffset? recordedAt = record?["at"]?.GetValue<string>() is string at
+        DateTimeOffset? recordedAt = record?["at"] is JsonValue atValue
+            && atValue.TryGetValue(out string? at)
             && DateTimeOffset.TryParse(at, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out DateTimeOffset parsed)
             ? parsed
             : null;
