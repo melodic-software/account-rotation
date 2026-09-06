@@ -66,6 +66,11 @@ public static class SwitchPlanner
             return Refuse(SwitchRefusal.TargetLoginExpired);
         }
 
+        if (input.Policy.Unreadable)
+        {
+            return Refuse(SwitchRefusal.ManagedPolicyUnreadable);
+        }
+
         if (input.Policy.BlocksSwitching)
         {
             return Refuse(SwitchRefusal.SwitchingBlockedByManagedPolicy);

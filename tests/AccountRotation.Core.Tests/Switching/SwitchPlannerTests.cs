@@ -49,6 +49,14 @@ public sealed class SwitchPlannerTests
     }
 
     [Fact]
+    public void RefusesWhenTheManagedPolicyCouldNotBeRead()
+    {
+        SwitchPlanningInput input = Baseline() with { Policy = new ManagedLoginPolicy(null, "HKLM (unreadable: access denied)", Unreadable: true) };
+
+        SwitchPlanner.Plan(input).Error.ShouldBe(SwitchRefusal.ManagedPolicyUnreadable);
+    }
+
+    [Fact]
     public void PlansParkingTheLiveAccountAndUnparkingTheTarget()
     {
         SwitchPlan plan = SwitchPlanner.Plan(Baseline()).Value;

@@ -47,6 +47,7 @@ internal static class SwitchEndpoints
         SwitchRefusal.RefreshLockPresent => "A session is refreshing its token right now; try again in a moment.",
         SwitchRefusal.TargetLoginExpired => "That account's login has expired; log in again.",
         SwitchRefusal.SwitchingBlockedByManagedPolicy => "A device-managed login policy pins this machine to one organization.",
+        SwitchRefusal.ManagedPolicyUnreadable => "A device-managed login policy exists but could not be read; switching stays off until it can be.",
         SwitchRefusal.LiveIdentityUnverified => "The live identity could not be verified; see the banner.",
         SwitchRefusal.MutationInProgress => "Another credential change is in progress.",
         _ => refusal.ToString(),

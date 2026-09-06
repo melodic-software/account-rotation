@@ -1,4 +1,5 @@
 using AccountRotation.App;
+using AccountRotation.Core;
 using AccountRotation.Core.Switching;
 
 namespace AccountRotation.App.Tests;
@@ -80,6 +81,26 @@ public sealed class ManagedLoginPolicyReaderTests : IDisposable
 
         policy.ForceLoginOrgUuid.ShouldBeNull();
         policy.Source.ShouldContain("unreadable");
+        policy.Unreadable.ShouldBeTrue();
+        policy.BlocksSwitching.ShouldBeTrue("a pin that may exist but cannot be read must fail closed");
+    }
+
+    [Fact]
+    public async Task AnUnreadableMachineValueBlocksInsteadOfFallingThroughToTheUserValue()
+    {
+        // A REG_DWORD or an access denial at the HKLM value is not an absent policy: the
+        // user-writable HKCU value must never stand in for the enterprise pin.
+        ManagedLoginPolicyReader reader = new(
+            _managedSettingsPath,
+            static () => Result<string?, string>.Failure("the value is a DWord, not the REG_SZ the policy is read from"),
+            static () => Result<string?, string>.Success("""{"forceLoginOrgUUID":"org-user"}"""));
+
+        ManagedLoginPolicy policy = await reader.ReadAsync(TestContext.Current.CancellationToken);
+
+        policy.Unreadable.ShouldBeTrue();
+        policy.Source.ShouldContain("HKLM");
+        policy.ForceLoginOrgUuid.ShouldBeNull();
+        policy.BlocksSwitching.ShouldBeTrue();
     }
 
     public void Dispose()

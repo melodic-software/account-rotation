@@ -15,6 +15,7 @@ public enum SwitchRefusal
     RefreshLockPresent,
     TargetLoginExpired,
     SwitchingBlockedByManagedPolicy,
+    ManagedPolicyUnreadable,
     LiveIdentityUnverified,
     MutationInProgress,
 }
