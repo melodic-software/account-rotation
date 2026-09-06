@@ -291,7 +291,22 @@ Behavioral reference: `spike-04-swap.py` (memory slice), guard for guard.
   `RefreshLockWaitBound` (default 10 s) and then refuses with `RefreshLockPresent`; it holds the lock
   across park → unpark → patch (milliseconds) and removes the directory in `finally`. The wildcard
   `*.lock` file scan stays only as a secondary guard. D2 is closed by this item.
-- [ ] **1.5a Probe (this desktop, before the first real switch):** perform one swap **without**
+- [x] **1.5a** (2026-09-06, this desktop, CLI 2.1.263: **keep the patch.** One switch with
+  `patchStateFile: false` and three sessions open. The credential move worked and every session
+  billed the incoming account on its next request (the statusline tee's buckets went from 28 and 68
+  percent to 6 and 3 percent), but nine minutes and many requests later `oauthAccount` still named
+  the outgoing account with `profileFetchedAt` untouched and `claude auth status --json` reported
+  the outgoing account: the binary does not re-stamp on an ordinary request. Two consequences.
+  First, the page derives liveness from the state file, so it showed the incoming account as
+  "needs login", and the planner would have refused the next switch (`AlreadyOnTarget` or
+  `TargetHasNoCredentials`); the `patchStateFile` knob is therefore a foot-gun to remove, and the
+  dashboard re-patch guard the risk table describes is not built. Second, the first request after
+  the unpark refreshed the expired access token and rotated the refresh token, so `live-owner.json`
+  no longer matched the live fingerprint and the owner guard silently stopped applying; both are
+  carried to the #3 review and Phase 2. Recovery ran through the tool's own path: a journal at step
+  `Unparked` carrying the current fingerprint, then startup reconciliation patched the 90 KB state
+  file in one attempt and `claude auth status` reported the incoming account.) **Probe (this
+  desktop, before the first real switch):** perform one swap **without**
   patching the state file. The binary re-derives and writes `oauthAccount` itself after its next
   profile fetch (`stampAuthenticatedAccount` re-stamps on an email or uuid mismatch), so the patch
   may be redundant and it races the CLI's own write of an 88 KB file. If `claude auth status --json`
@@ -624,8 +639,8 @@ to 5 except that Phase 2's `RateLimitGuardTeeFileReader` already parses the key 
 - [x] **6.5** (2026-09-05: claude-code-plugins#3778, opened by the main session after a fresh-context
   verifier passed all eleven criteria; #1218 is closed as not planned, so the body cites it as `Refs`
   with a `No related issue:` line rather than a closing keyword. Two Codex findings fixed and every
-  CI lane green; squash-merged 2026-09-06 as `daa95f1de`, rate-limit-guard `0.8.0` is live on the
-  marketplace `main`. Phase 6 stays DOING for 6.6, which lands with Phase 2 here.) Open the PR with `/source-control:pull-request`; body references #1218, lists the
+  CI lane green; squash-merged 2026-09-06 as claude-code-plugins#3778, rate-limit-guard `0.8.0` is
+  live on the marketplace `main`. Phase 6 stays DOING for 6.6, which lands with Phase 2 here.) Open the PR with `/source-control:pull-request`; body references #1218, lists the
   consumers from 6.1, carries the timing numbers, and names the reader-side follow-up as out of scope.
 - [ ] **6.6** In this repo, `DashboardAssembler` treats a tee snapshot for the live account as
   unattributed ("pre-switch windows") when its `resets_at` values equal the outgoing account's last
