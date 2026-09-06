@@ -845,7 +845,8 @@ what you found, what the brief expected, and the exact state of your work
 - Whether `claude auth logout` under a profile folder revokes server-side (research unknown 6); the
   optional logout on Remove is offered either way.
 - Whether a running session ever writes a stale `oauthAccount` back to the state file after a
-  switch (Phase 1 acceptance probe; the dashboard re-patch guard covers it either way).
+  switch (answered 2026-09-06: not seen over eight hours; the owner record's stale-block refusal
+  is the guard if it ever happens, since the dashboard does not re-patch).
 - Whether `login_hint` is honored on the interactive `/login` URL (only matters under mechanism b).
 
 ## Handoff to implementation

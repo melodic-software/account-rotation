@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using AccountRotation.App.Adapters.FileSystem;
 using AccountRotation.Core;
@@ -182,7 +183,9 @@ internal sealed partial class LiveDirectorySwitch
             await _journal.ClearAsync(committed);
         }
 
-        Result<ClaudeAuthStatus, string> verification = await _authStatus.ReadAsync(null, cancellationToken);
+        // The verification belongs to the committed switch as well: an aborted request must
+        // still get the outcome, and the CLI adapter bounds the read with its own timeout.
+        Result<ClaudeAuthStatus, string> verification = await _authStatus.ReadAsync(null, CancellationToken.None);
         bool mismatch = verification.IsSuccess
             && verification.Value.Email is string reported
             && !string.Equals(reported.Trim(), plan.Incoming.Value, StringComparison.OrdinalIgnoreCase);
@@ -356,9 +359,21 @@ internal sealed partial class LiveDirectorySwitch
             return null;
         }
 
-        var record = JsonNode.Parse(await SharedFileReader.ReadAllBytesAsync(_liveOwnerPath, cancellationToken)) as JsonObject;
-        string? fingerprint = record?["fingerprint"]?.GetValue<string>();
-        string? email = record?["email"]?.GetValue<string>();
+        string? fingerprint;
+        string? email;
+        JsonObject? record;
+        try
+        {
+            record = JsonNode.Parse(await SharedFileReader.ReadAllBytesAsync(_liveOwnerPath, cancellationToken)) as JsonObject;
+            fingerprint = record?["fingerprint"] is JsonValue fingerprintValue && fingerprintValue.TryGetValue(out string? fingerprintText) ? fingerprintText : null;
+            email = record?["email"] is JsonValue emailValue && emailValue.TryGetValue(out string? emailText) ? emailText : null;
+        }
+        catch (JsonException)
+        {
+            // A corrupt record is no recorded owner; the next switch writes a fresh one.
+            return null;
+        }
+
         if (fingerprint is null || email is null)
         {
             return null;
