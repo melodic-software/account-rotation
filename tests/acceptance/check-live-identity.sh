@@ -3,7 +3,7 @@
 # printing the e-mail the live pair actually bills. Run once per acceptance
 # pass to confirm the account the page reports is the account the server sees.
 # The token is read into a variable and sent as a bearer header only; it is
-# never printed.
+# never printed and never placed on a command line.
 #
 # Usage: check-live-identity.sh [<live-dir>]   (default: $CLAUDE_CONFIG_DIR or ~/.claude)
 set -euo pipefail
@@ -18,8 +18,11 @@ user_agent="account-rotation-acceptance/1 (+https://github.com/melodic-software/
 access_token="$(jq -r '.claudeAiOauth.accessToken // empty' -- "$credential_file")"
 [[ -n "$access_token" ]] || { echo "no access token in $credential_file" >&2; exit 2; }
 
-response="$(curl --silent --show-error --fail \
-  --header "Authorization: Bearer $access_token" \
+# The bearer header travels on curl's stdin as a config line, never as an argument:
+# an argument would sit in the process list and /proc/<pid>/cmdline for the life of
+# the request.
+response="$(printf 'header = "Authorization: Bearer %s"\n' "$access_token" | curl --silent --show-error --fail \
+  --config - \
   --header "anthropic-beta: oauth-2025-04-20" \
   --header "Accept: application/json" \
   --user-agent "$user_agent" \

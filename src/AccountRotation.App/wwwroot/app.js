@@ -56,8 +56,16 @@
       .catch(function (error) { showToast("Dashboard unavailable: " + error, "error"); });
   }
 
+  function disableSwitchButtons() {
+    // Synchronously, at click time: the next render re-enables per account state. A
+    // second click during the lock wait would otherwise send a second POST whose
+    // refusal toast overwrote the outcome of the first.
+    Array.prototype.forEach.call(cards.querySelectorAll("button.switch"), function (button) { button.disabled = true; });
+  }
+
   function switchTo(email) {
     switching = true;
+    disableSwitchButtons();
     fetch("/api/accounts/" + encodeURIComponent(email) + "/switch", {
       method: "POST",
       headers: { "X-Account-Rotation": "1", "Accept": "application/json" }
