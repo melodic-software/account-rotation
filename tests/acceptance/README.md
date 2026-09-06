@@ -4,15 +4,14 @@ The Brief's criteria that need the real CLI, real sessions, and a real browser. 
 the desktop with the user present; record each pass in the log at the bottom. Nothing here runs in
 CI.
 
-## Before the first real switch: the state-file patch probe (plan item 1.5a)
+## The state-file patch probe (plan item 1.5a, run 2026-09-06)
 
-1. Set `"patchStateFile": false` in `config.json` and start the tool.
-2. Open three Claude Code sessions on the live account.
-3. Click Switch to a parked account, then send one message in each session.
-4. Check `claude auth status --json | jq -r .email` and `/status` in every session.
-5. If all four report the incoming account, the CLI re-stamps `oauthAccount` itself: set the default
-   to `false` in `ConfigurationDefaults`, record the outcome under 1.5a in `PLAN.md`, and skip the
-   state-file assertions below. If any still reports the outgoing account, keep `true` and record that.
+Run once, before the first real switch, with the patch disabled: three sessions open, one switch to a
+parked account, one message in each session, then `claude auth status --json | jq -r .email` and
+`/status` everywhere. Every session billed the incoming account on its next request, but the CLI
+never re-stamped `oauthAccount`, so identity stayed on the outgoing account. The patch is therefore
+unconditional and the `patchStateFile` key no longer exists; the outcome is recorded under 1.5a in
+`PLAN.md` and in the log below. The probe is not repeated.
 
 ## AC 1, switch without a browser, and AC 9, refresh lock respected
 
