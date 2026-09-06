@@ -34,6 +34,13 @@ public static class SwitchPlanner
             return Refuse(SwitchRefusal.TargetIsLiveDirectory);
         }
 
+        // The live account's own folder never holds a pair, so "already live" is decided
+        // before "no parked credentials" or the refusal names the wrong reason.
+        if (liveEmail is not null && input.Target.Account?.Email == liveEmail)
+        {
+            return Refuse(SwitchRefusal.AlreadyOnTarget);
+        }
+
         if (!input.Target.HasCredentials || input.TargetCredentials is null)
         {
             return Refuse(SwitchRefusal.TargetHasNoCredentials);
@@ -42,11 +49,6 @@ public static class SwitchPlanner
         if (input.Target.Account?.Email is not AccountEmail incoming)
         {
             return Refuse(SwitchRefusal.TargetHasNoAccountBlock);
-        }
-
-        if (liveEmail == incoming)
-        {
-            return Refuse(SwitchRefusal.AlreadyOnTarget);
         }
 
         if (input.LiveCredentials is not null && input.LiveCredentials.Fingerprint == input.TargetCredentials.Fingerprint)

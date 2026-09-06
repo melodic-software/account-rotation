@@ -115,7 +115,7 @@ internal sealed partial class LiveDirectorySwitch
             : null;
         ManagedLoginPolicy policy = await _policyReader.ReadAsync(cancellationToken);
         bool journalOpen = await _journal.ReadOpenAsync(cancellationToken) is not null || QuarantineHoldsFiles();
-        AccountEmail? liveOwner = await ReadLiveOwnerAsync(live.Fingerprint, cancellationToken);
+        AccountEmail? liveOwner = await ReadLiveOwnerAsync(live, cancellationToken);
         DateTimeOffset now = _timeProvider.GetUtcNow();
 
         Result<SwitchPlan, SwitchRefusal> planned = SwitchPlanner.Plan(new SwitchPlanningInput(
@@ -136,35 +136,50 @@ internal sealed partial class LiveDirectorySwitch
 
         await using (held.Value)
         {
+            // Read again under the lock: a session may have refreshed, and so rotated, the
+            // live pair during the wait, and the journal must carry the fingerprint that is
+            // on disk. A pair that appeared or vanished meanwhile invalidates the plan.
+            CredentialPair? lockedLive = await _pairs.ReadLiveAsync(cancellationToken);
+            if ((liveCredentials is null) != (lockedLive is null))
+            {
+                LogRefused(target.Value, SwitchRefusal.LiveIdentityUnverified);
+                return Result<SwitchOutcome, SwitchRefusal>.Failure(SwitchRefusal.LiveIdentityUnverified);
+            }
+
             SwitchJournalEntry entry = new(
-                plan.Outgoing, liveCredentials?.Fingerprint, plan.OutgoingFolderPath,
+                plan.Outgoing, lockedLive?.Fingerprint, plan.OutgoingFolderPath,
                 plan.Incoming, targetCredentials!.Fingerprint, plan.IncomingFolderPath,
                 SwitchStep.Planned, now);
             await _journal.WriteAsync(entry, cancellationToken);
 
+            // From the first move on, the request's own token is not consulted: a browser
+            // abort must not leave the live directory without a pair. Every step below runs
+            // to completion or is journaled for startup reconciliation.
+            CancellationToken committed = CancellationToken.None;
             if (plan.Outgoing is AccountEmail outgoing && plan.OutgoingFolderPath is string outgoingFolder)
             {
-                await _profiles.EnsureFolderAsync(outgoing, cancellationToken);
+                await _profiles.EnsureFolderAsync(outgoing, committed);
                 if (live.Account is not null)
                 {
-                    await _profiles.WriteProfileAsync(outgoingFolder, live.Account, cancellationToken);
+                    await _profiles.WriteProfileAsync(outgoingFolder, live.Account, committed);
                 }
 
-                await _pairs.MoveLiveToParkedAsync(outgoingFolder, cancellationToken);
-                await _journal.WriteAsync(entry with { StepReached = SwitchStep.Parked }, cancellationToken);
+                await _pairs.MoveLiveToParkedAsync(outgoingFolder, committed);
             }
 
-            await _pairs.MoveParkedToLiveAsync(plan.IncomingFolderPath, cancellationToken);
-            await _journal.WriteAsync(entry with { StepReached = SwitchStep.Unparked }, cancellationToken);
+            // The unpark follows the park at once and the journal catches up afterwards, so
+            // the window in which no live pair exists is two renames, not a flushed write.
+            await _pairs.MoveParkedToLiveAsync(plan.IncomingFolderPath, committed);
+            await _journal.WriteAsync(entry with { StepReached = SwitchStep.Unparked }, committed);
 
             if (_options.PatchStateFile)
             {
-                await _stateFile.PatchAccountBlockAsync(plan.IncomingAccount, cancellationToken);
-                await _journal.WriteAsync(entry with { StepReached = SwitchStep.Patched }, cancellationToken);
+                await _stateFile.PatchAccountBlockAsync(plan.IncomingAccount, committed);
+                await _journal.WriteAsync(entry with { StepReached = SwitchStep.Patched }, committed);
             }
 
-            await WriteLiveOwnerAsync(targetCredentials.Fingerprint, plan.Incoming, cancellationToken);
-            await _journal.ClearAsync(cancellationToken);
+            await WriteLiveOwnerAsync(targetCredentials.Fingerprint, plan.Incoming, committed);
+            await _journal.ClearAsync(committed);
         }
 
         Result<ClaudeAuthStatus, string> verification = await _authStatus.ReadAsync(null, cancellationToken);
@@ -222,11 +237,12 @@ internal sealed partial class LiveDirectorySwitch
             foreach ((string path, _, _) in copies.Where(copy => !string.Equals(copy.Path, kept.Path, StringComparison.Ordinal)))
             {
                 string stamp = _timeProvider.GetUtcNow().ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture);
-                string folderName = Path.GetFileName(Path.GetDirectoryName(path)!);
-                string destinationDirectory = Path.Combine(_quarantineDirectory, stamp + "-" + folderName);
-                Directory.CreateDirectory(destinationDirectory);
+                string folder = Path.GetDirectoryName(path)!;
+                string destinationDirectory = Path.Combine(_quarantineDirectory, stamp + "-" + Path.GetFileName(folder));
+                // The extra copy is always a parked one (the live copy is the one kept), and it
+                // moves by the store's guarded rename: never a copy across volumes.
+                await _pairs.MoveParkedToQuarantineAsync(folder, destinationDirectory, cancellationToken);
                 string destination = Path.Combine(destinationDirectory, FileSystemCredentialPairStore.FileName);
-                File.Move(path, destination);
                 quarantined.Add(destination);
                 LogQuarantined(path, destination, lineage.Key.Sha256Hex[..12]);
             }
@@ -245,8 +261,21 @@ internal sealed partial class LiveDirectorySwitch
 
         RefreshTokenFingerprint? liveFingerprint = (await _pairs.ReadLiveAsync(cancellationToken))?.Fingerprint;
         string incomingFolder = entry.IncomingFolderPath;
+        RefreshTokenFingerprint? incomingParkedFingerprint = (await _pairs.ReadParkedAsync(incomingFolder, cancellationToken))?.Fingerprint;
+        RefreshTokenFingerprint? outgoingParkedFingerprint = entry.OutgoingFolderPath is string outgoingFolderPath
+            ? (await _pairs.ReadParkedAsync(outgoingFolderPath, cancellationToken))?.Fingerprint
+            : null;
+        bool incomingStillParked = incomingParkedFingerprint == entry.IncomingFingerprint;
+        bool outgoingParked = entry.OutgoingFolderPath is not null && outgoingParkedFingerprint == entry.OutgoingFingerprint;
 
-        if (liveFingerprint == entry.IncomingFingerprint)
+        // A live token rotates on the CLI's next refresh, so after a crash the live
+        // fingerprint may match neither side of the journal. The folder layout still
+        // says what happened: a live pair with the incoming folder emptied (and the
+        // outgoing pair parked, when there was one) is a finished unpark.
+        bool unparkFinished = liveFingerprint == entry.IncomingFingerprint
+            || (liveFingerprint is not null && incomingParkedFingerprint is null && (entry.OutgoingFolderPath is null || outgoingParked));
+
+        if (unparkFinished && liveFingerprint is RefreshTokenFingerprint liveNow)
         {
             // The unpark happened; only the patch, the owner record, and the clear may be missing.
             if (_options.PatchStateFile)
@@ -264,15 +293,11 @@ internal sealed partial class LiveDirectorySwitch
                 }
             }
 
-            await WriteLiveOwnerAsync(entry.IncomingFingerprint, entry.Incoming, cancellationToken);
+            await WriteLiveOwnerAsync(liveNow, entry.Incoming, cancellationToken);
             await _journal.ClearAsync(cancellationToken);
             LogReconciled("completed", entry.Incoming.Value);
             return ("completed the switch to " + entry.Incoming.Value, false);
         }
-
-        bool outgoingParked = entry.OutgoingFolderPath is string outgoingFolder
-            && (await _pairs.ReadParkedAsync(outgoingFolder, cancellationToken))?.Fingerprint == entry.OutgoingFingerprint;
-        bool incomingStillParked = (await _pairs.ReadParkedAsync(incomingFolder, cancellationToken))?.Fingerprint == entry.IncomingFingerprint;
 
         if (liveFingerprint is null && outgoingParked && incomingStillParked && entry.OutgoingFolderPath is string parkedFolder)
         {
@@ -296,7 +321,12 @@ internal sealed partial class LiveDirectorySwitch
             return ("unwound the switch; " + (entry.Outgoing?.Value ?? "the previous pair") + " is live again", false);
         }
 
-        bool nothingMoved = (liveFingerprint == entry.OutgoingFingerprint || (liveFingerprint is null && entry.OutgoingFingerprint is null)) && incomingStillParked;
+        // Nothing moved when the incoming pair is still parked and the live directory holds
+        // the outgoing pair (by fingerprint, or rotated: a live pair while the outgoing
+        // folder holds none) or, for a switch that had nothing to park, no pair at all.
+        bool liveIsOutgoing = liveFingerprint == entry.OutgoingFingerprint
+            || (liveFingerprint is not null && entry.OutgoingFingerprint is not null && outgoingParkedFingerprint is null);
+        bool nothingMoved = (liveIsOutgoing || (liveFingerprint is null && entry.OutgoingFingerprint is null)) && incomingStillParked;
         if (nothingMoved)
         {
             await _journal.ClearAsync(cancellationToken);
@@ -311,9 +341,20 @@ internal sealed partial class LiveDirectorySwitch
     private bool QuarantineHoldsFiles() =>
         Directory.Exists(_quarantineDirectory) && Directory.EnumerateFiles(_quarantineDirectory, "*", SearchOption.AllDirectories).Any();
 
-    private async Task<AccountEmail?> ReadLiveOwnerAsync(RefreshTokenFingerprint? liveFingerprint, CancellationToken cancellationToken)
+    /// <summary>
+    /// The account the live pair was unparked for, from the owner record. The CLI
+    /// rotates the refresh token on its first refresh after every unpark, so a
+    /// record whose fingerprint no longer matches is the normal case within seconds
+    /// of a switch: while the state file still names the recorded owner the record
+    /// is re-bound to the new fingerprint. When the state file names another
+    /// account, a block the CLI stamped after the record was written means a login
+    /// replaced the pair and the record is released; an older block means a
+    /// session wrote a stale identity back, and the recorded owner stands so the
+    /// planner refuses. Every transition is logged; the guard never lapses silently.
+    /// </summary>
+    private async Task<AccountEmail?> ReadLiveOwnerAsync(LiveAccountState live, CancellationToken cancellationToken)
     {
-        if (liveFingerprint is null || !File.Exists(_liveOwnerPath))
+        if (live.Fingerprint is not RefreshTokenFingerprint liveFingerprint || !File.Exists(_liveOwnerPath))
         {
             return null;
         }
@@ -321,16 +362,61 @@ internal sealed partial class LiveDirectorySwitch
         var record = JsonNode.Parse(await File.ReadAllBytesAsync(_liveOwnerPath, cancellationToken)) as JsonObject;
         string? fingerprint = record?["fingerprint"]?.GetValue<string>();
         string? email = record?["email"]?.GetValue<string>();
-        return fingerprint is not null && email is not null && new RefreshTokenFingerprint(fingerprint) == liveFingerprint
-            ? new AccountEmail(email)
+        if (fingerprint is null || email is null)
+        {
+            return null;
+        }
+
+        AccountEmail owner = new(email);
+        if (new RefreshTokenFingerprint(fingerprint) == liveFingerprint)
+        {
+            return owner;
+        }
+
+        if (live.Account?.Email == owner)
+        {
+            await WriteLiveOwnerAsync(liveFingerprint, owner, cancellationToken);
+            LogOwnerRebound(owner.Value, liveFingerprint.Sha256Hex[..12]);
+            return owner;
+        }
+
+        DateTimeOffset? recordedAt = record?["at"]?.GetValue<string>() is string at
+            && DateTimeOffset.TryParse(at, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out DateTimeOffset parsed)
+            ? parsed
             : null;
+        if (live.Account?.ProfileFetchedAt is DateTimeOffset fetchedAt && recordedAt is DateTimeOffset writtenAt && fetchedAt > writtenAt)
+        {
+            LogOwnerReleased(owner.Value, live.Account.Email?.Value ?? "(none)");
+            await AtomicBytesFile.DeleteWithRetryAsync(_liveOwnerPath, cancellationToken);
+            return null;
+        }
+
+        LogOwnerStale(owner.Value, live.Account?.Email?.Value ?? "(none)");
+        return owner;
     }
 
     private Task WriteLiveOwnerAsync(RefreshTokenFingerprint fingerprint, AccountEmail owner, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(_liveOwnerPath)!);
-        return AtomicJsonFile.WriteAsync(_liveOwnerPath, new JsonObject { ["fingerprint"] = fingerprint.Sha256Hex, ["email"] = owner.Value }, cancellationToken);
+        return AtomicJsonFile.WriteAsync(
+            _liveOwnerPath,
+            new JsonObject
+            {
+                ["fingerprint"] = fingerprint.Sha256Hex,
+                ["email"] = owner.Value,
+                ["at"] = _timeProvider.GetUtcNow().ToString("O", CultureInfo.InvariantCulture),
+            },
+            cancellationToken);
     }
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "live owner record re-bound to the rotated pair {Fingerprint} for {Owner}")]
+    private partial void LogOwnerRebound(string owner, string fingerprint);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "live owner record for {Owner} released: the CLI stamped a login as {Named} after it was written")]
+    private partial void LogOwnerReleased(string owner, string named);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "live owner record for {Owner} disagrees with the state file, which names {Named} from before the record; switching refuses until they agree")]
+    private partial void LogOwnerStale(string owner, string named);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "switched {From} -> {To} (cli mismatch: {Mismatch})")]
     private partial void LogSwitched(string? from, string to, bool mismatch);

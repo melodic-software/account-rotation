@@ -71,15 +71,13 @@ internal sealed class SwitchJournal
         return document?.ToEntry();
     }
 
-    public Task ClearAsync(CancellationToken cancellationToken)
+    public async Task ClearAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (File.Exists(_path))
         {
-            File.Delete(_path);
+            await AtomicBytesFile.DeleteWithRetryAsync(_path, cancellationToken);
         }
-
-        return Task.CompletedTask;
     }
 
     /// <summary>The on-disk shape: primitives only, so the value types need no converters.</summary>

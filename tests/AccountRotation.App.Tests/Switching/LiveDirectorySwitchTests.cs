@@ -47,11 +47,11 @@ public sealed class LiveDirectorySwitchTests : IDisposable
         return folder;
     }
 
-    private LiveDirectorySwitch Switch(TimeSpan? lockWait = null, bool patchStateFile = true, TimeSpan? gateTimeout = null)
+    private LiveDirectorySwitch Switch(TimeSpan? lockWait = null, bool patchStateFile = true, TimeSpan? gateTimeout = null, ICredentialPairStore? pairs = null)
     {
         SwitchOptions options = new(_liveDirectory, _stateFilePath, _profilesRoot, _appData, lockWait ?? TimeSpan.FromSeconds(2), gateTimeout ?? TimeSpan.FromMilliseconds(200), patchStateFile);
         return new LiveDirectorySwitch(
-            new FileSystemCredentialPairStore(_liveDirectory, _profilesRoot, TimeProvider.System),
+            pairs ?? new FileSystemCredentialPairStore(_liveDirectory, _profilesRoot, TimeProvider.System),
             new ClaudeStateFile(_stateFilePath),
             new ProfileFolderStore(_profilesRoot),
             new SwitchJournal(_appData),
@@ -268,6 +268,81 @@ public sealed class LiveDirectorySwitchTests : IDisposable
         fingerprints.Distinct().Count().ShouldBe(3);
     }
 
+    [Fact]
+    public async Task ARequestAbortedAfterTheParkStillCompletesTheUnpark()
+    {
+        // The browser can abort the request at any moment (tab closed, navigation); once the
+        // first move has happened, the switch must run to completion rather than leave the
+        // live directory with no credential file.
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        await ParkedProfileAsync("b@example.com", "refresh-b");
+        _cli.Email = "b@example.com";
+        using CancellationTokenSource request = new();
+        DelegatingPairStore pairs = new(new FileSystemCredentialPairStore(_liveDirectory, _profilesRoot, TimeProvider.System))
+        {
+            AfterPark = request.Cancel,
+        };
+
+        Result<SwitchOutcome, SwitchRefusal> result = await Switch(pairs: pairs).SwitchToAsync(Email("b@example.com"), request.Token);
+
+        result.IsSuccess.ShouldBeTrue(result.IsFailure ? result.Error.ToString() : "");
+        (await CredentialFiles.FingerprintAsync(_liveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-b").Fingerprint);
+        (await StateFileEmailAsync()).ShouldBe("b@example.com");
+        File.Exists(Path.Combine(_appData, "state", "switch-journal.json")).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task TheOwnerRecordIsReboundWhenTheLivePairRotatesUnderTheSameAccount()
+    {
+        // The CLI rotates the refresh token on its next refresh, which on a real machine
+        // happened within seconds of every unpark. The record must follow the rotation
+        // while the state file still names the recorded owner, or the guard it feeds
+        // silently stops applying.
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        await ParkedProfileAsync("b@example.com", "refresh-b");
+        _cli.Email = "b@example.com";
+        (await Switch().SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken)).IsSuccess.ShouldBeTrue();
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-b-rotated", TestContext.Current.CancellationToken);
+
+        Result<SwitchOutcome, SwitchRefusal> refused = await Switch().SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken);
+
+        refused.Error.ShouldBe(SwitchRefusal.AlreadyOnTarget);
+        JsonObject record = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(_appData, "state", "live-owner.json"), TestContext.Current.CancellationToken))!.AsObject();
+        record["fingerprint"]!.GetValue<string>().ShouldBe(CredentialFiles.Pair("refresh-b-rotated").Fingerprint.Sha256Hex);
+        record["email"]!.GetValue<string>().ShouldBe("b@example.com");
+    }
+
+    [Fact]
+    public async Task AJournaledSwitchWhoseLivePairHasRotatedIsStillCompletedAtStartup()
+    {
+        // As on the real machine: the unpark happened, a session refreshed and rotated the
+        // live token before the tool came back, so the fingerprints no longer match the
+        // journal, but the folder layout is unambiguous (live holds a pair, b's folder
+        // holds none, a's folder holds a's pair).
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-b-rotated", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        string folderA = await ParkedProfileAsync("a@example.com", "refresh-a");
+        string folderB = Path.Combine(_profilesRoot, "b@example.com");
+        Directory.CreateDirectory(folderB);
+        await File.WriteAllTextAsync(Path.Combine(folderB, "profile.json"), AccountJson("b@example.com").ToJsonString(), TestContext.Current.CancellationToken);
+        SwitchJournal journal = new(_appData);
+        await journal.WriteAsync(new SwitchJournalEntry(
+            Email("a@example.com"), CredentialFiles.Pair("refresh-a").Fingerprint, folderA,
+            Email("b@example.com"), CredentialFiles.Pair("refresh-b").Fingerprint, folderB,
+            SwitchStep.Unparked, DateTimeOffset.UtcNow), TestContext.Current.CancellationToken);
+
+        ReconciliationReport report = await Switch().ReconcileAsync(TestContext.Current.CancellationToken);
+
+        report.JournalOutcome.ShouldContain("completed");
+        report.SwitchingBlocked.ShouldBeFalse();
+        (await StateFileEmailAsync()).ShouldBe("b@example.com");
+        (await journal.ReadOpenAsync(TestContext.Current.CancellationToken)).ShouldBeNull();
+        JsonObject record = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(_appData, "state", "live-owner.json"), TestContext.Current.CancellationToken))!.AsObject();
+        record["fingerprint"]!.GetValue<string>().ShouldBe(CredentialFiles.Pair("refresh-b-rotated").Fingerprint.Sha256Hex);
+    }
+
     public void Dispose()
     {
         _gate.Dispose();
@@ -275,6 +350,32 @@ public sealed class LiveDirectorySwitchTests : IDisposable
         {
             Directory.Delete(_root, recursive: true);
         }
+    }
+
+    /// <summary>Forwards to the real store and runs a hook after the park, the seam a request abort needs.</summary>
+    private sealed class DelegatingPairStore(ICredentialPairStore inner) : ICredentialPairStore
+    {
+        public Action? AfterPark { get; init; }
+
+        public Task<CredentialPair?> ReadLiveAsync(CancellationToken cancellationToken) => inner.ReadLiveAsync(cancellationToken);
+
+        public Task<CredentialPair?> ReadParkedAsync(string folderPath, CancellationToken cancellationToken) => inner.ReadParkedAsync(folderPath, cancellationToken);
+
+        public async Task MoveLiveToParkedAsync(string folderPath, CancellationToken cancellationToken)
+        {
+            await inner.MoveLiveToParkedAsync(folderPath, cancellationToken);
+            AfterPark?.Invoke();
+        }
+
+        public Task MoveParkedToLiveAsync(string folderPath, CancellationToken cancellationToken) => inner.MoveParkedToLiveAsync(folderPath, cancellationToken);
+
+        public Task MoveParkedToQuarantineAsync(string folderPath, string destinationDirectory, CancellationToken cancellationToken) => inner.MoveParkedToQuarantineAsync(folderPath, destinationDirectory, cancellationToken);
+
+        public Task<Result<Unit, string>> WriteParkedAsync(string folderPath, CredentialPair pair, RefreshTokenFingerprint expected, CancellationToken cancellationToken) => inner.WriteParkedAsync(folderPath, pair, expected, cancellationToken);
+
+        public Task<Result<IAsyncDisposable, string>> AcquireRefreshLockAsync(TimeSpan waitBound, CancellationToken cancellationToken) => inner.AcquireRefreshLockAsync(waitBound, cancellationToken);
+
+        public string? FreshLockFileName(TimeSpan maxAge) => inner.FreshLockFileName(maxAge);
     }
 
     private sealed class CannedAuthStatus : IClaudeCliAuthStatus

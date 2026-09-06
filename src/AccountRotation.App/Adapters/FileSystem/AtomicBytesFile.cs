@@ -61,6 +61,32 @@ internal static class AtomicBytesFile
         }
     }
 
+    /// <summary>
+    /// Deletes a file under the same sharing-violation retry as a replace: a scanner
+    /// holding a just-written file for a moment must not turn a finished operation
+    /// into a failure.
+    /// </summary>
+    internal static async Task DeleteWithRetryAsync(string path, CancellationToken cancellationToken)
+    {
+        TimeSpan waited = TimeSpan.Zero;
+        TimeSpan backoff = _initialBackoff;
+        while (true)
+        {
+            try
+            {
+                File.Delete(path);
+                return;
+            }
+            catch (IOException exception) when (IsTransientSharingFailure(exception) && waited < _retryBudget)
+            {
+                TimeSpan delay = backoff + TimeSpan.FromMilliseconds(RandomNumberGenerator.GetInt32(25));
+                await Task.Delay(delay, cancellationToken);
+                waited += delay;
+                backoff = backoff * 2 > _maximumBackoff ? _maximumBackoff : backoff * 2;
+            }
+        }
+    }
+
     internal static async Task MoveIntoPlaceWithRetryAsync(string temporaryPath, string path, CancellationToken cancellationToken)
     {
         TimeSpan waited = TimeSpan.Zero;

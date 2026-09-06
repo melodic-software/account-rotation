@@ -24,6 +24,14 @@ public interface ICredentialPairStore
     Task MoveParkedToLiveAsync(string folderPath, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Moves the pair parked in <paramref name="folderPath"/> into
+    /// <paramref name="destinationDirectory"/> (created if missing) by the same
+    /// guarded rename as every other move: an existing destination or another
+    /// volume refuses rather than copies.
+    /// </summary>
+    Task MoveParkedToQuarantineAsync(string folderPath, string destinationDirectory, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Replaces a parked pair only when the file still holds the pair whose
     /// fingerprint is <paramref name="expected"/> (compare-and-swap), so a rotated
     /// pair never overwrites one that moved meanwhile.

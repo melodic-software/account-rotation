@@ -59,6 +59,16 @@ internal sealed class FileSystemCredentialPairStore : ICredentialPairStore
         return Task.CompletedTask;
     }
 
+    public Task MoveParkedToQuarantineAsync(string folderPath, string destinationDirectory, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ArgumentException.ThrowIfNullOrWhiteSpace(destinationDirectory);
+        string destination = Path.GetFullPath(destinationDirectory);
+        Directory.CreateDirectory(destination);
+        Rename(Path.Combine(ProfileFolder(folderPath), FileName), Path.Combine(destination, FileName));
+        return Task.CompletedTask;
+    }
+
     public async Task<Result<Unit, string>> WriteParkedAsync(
         string folderPath,
         CredentialPair pair,
