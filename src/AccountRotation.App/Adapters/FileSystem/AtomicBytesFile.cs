@@ -17,13 +17,9 @@ internal static class AtomicBytesFile
     public static async Task WriteAsync(string path, ReadOnlyMemory<byte> content, CancellationToken cancellationToken)
     {
         string fullPath = Path.GetFullPath(path);
-        string directory = Path.GetDirectoryName(fullPath)
-            ?? throw new ArgumentException("The path has no parent directory.", nameof(path));
-        string temporaryPath = Path.Combine(directory, "." + Path.GetFileName(fullPath) + "." + Guid.NewGuid().ToString("N") + ".tmp");
-
+        string temporaryPath = await WriteTemporaryAsync(fullPath, content, cancellationToken);
         try
         {
-            await WriteTemporaryAsync(temporaryPath, content, cancellationToken);
             await MoveIntoPlaceWithRetryAsync(temporaryPath, fullPath, cancellationToken);
         }
         finally
@@ -35,7 +31,35 @@ internal static class AtomicBytesFile
         }
     }
 
-    private static async Task WriteTemporaryAsync(string temporaryPath, ReadOnlyMemory<byte> content, CancellationToken cancellationToken)
+    /// <summary>
+    /// The staging half of <see cref="WriteAsync"/>: writes and flushes the content
+    /// into a temp file beside <paramref name="path"/> and returns its path, for a
+    /// caller that must check something between the staging and the rename. The
+    /// caller owns the temp file from here: it moves it into place or deletes it.
+    /// </summary>
+    internal static async Task<string> WriteTemporaryAsync(string path, ReadOnlyMemory<byte> content, CancellationToken cancellationToken)
+    {
+        string fullPath = Path.GetFullPath(path);
+        string directory = Path.GetDirectoryName(fullPath)
+            ?? throw new ArgumentException("The path has no parent directory.", nameof(path));
+        string temporaryPath = Path.Combine(directory, "." + Path.GetFileName(fullPath) + "." + Guid.NewGuid().ToString("N") + ".tmp");
+        try
+        {
+            await WriteTemporaryFileAsync(temporaryPath, content, cancellationToken);
+            return temporaryPath;
+        }
+        catch
+        {
+            if (File.Exists(temporaryPath))
+            {
+                File.Delete(temporaryPath);
+            }
+
+            throw;
+        }
+    }
+
+    private static async Task WriteTemporaryFileAsync(string temporaryPath, ReadOnlyMemory<byte> content, CancellationToken cancellationToken)
     {
         FileStreamOptions options = new()
         {

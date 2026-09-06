@@ -148,7 +148,7 @@ internal sealed class ProfileFolderStore
     {
         try
         {
-            byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken);
+            byte[] bytes = await SharedFileReader.ReadAllBytesAsync(path, cancellationToken);
             return JsonNode.Parse(bytes) as JsonObject;
         }
         catch (System.Text.Json.JsonException)

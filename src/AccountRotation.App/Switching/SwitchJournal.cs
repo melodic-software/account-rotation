@@ -66,7 +66,7 @@ internal sealed class SwitchJournal
             return null;
         }
 
-        byte[] bytes = await File.ReadAllBytesAsync(_path, cancellationToken);
+        byte[] bytes = await SharedFileReader.ReadAllBytesAsync(_path, cancellationToken);
         JournalDocument? document = JsonSerializer.Deserialize<JournalDocument>(bytes, _serializerOptions);
         return document?.ToEntry();
     }

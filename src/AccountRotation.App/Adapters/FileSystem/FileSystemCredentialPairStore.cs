@@ -127,7 +127,7 @@ internal sealed class FileSystemCredentialPairStore : ICredentialPairStore
             return null;
         }
 
-        byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken);
+        byte[] bytes = await SharedFileReader.ReadAllBytesAsync(path, cancellationToken);
         var node = JsonNode.Parse(bytes);
         if (node is not JsonObject raw)
         {

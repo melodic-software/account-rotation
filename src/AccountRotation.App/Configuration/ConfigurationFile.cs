@@ -33,7 +33,7 @@ internal static class ConfigurationFile
         JsonObject raw;
         try
         {
-            var node = JsonNode.Parse(await File.ReadAllBytesAsync(fullPath, cancellationToken), documentOptions: new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip });
+            var node = JsonNode.Parse(await SharedFileReader.ReadAllBytesAsync(fullPath, cancellationToken), documentOptions: new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip });
             if (node is not JsonObject parsed)
             {
                 return Result<AccountRotationConfiguration, string>.Failure("the configuration file " + fullPath + " is not a JSON object");

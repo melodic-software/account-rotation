@@ -359,7 +359,7 @@ internal sealed partial class LiveDirectorySwitch
             return null;
         }
 
-        var record = JsonNode.Parse(await File.ReadAllBytesAsync(_liveOwnerPath, cancellationToken)) as JsonObject;
+        var record = JsonNode.Parse(await SharedFileReader.ReadAllBytesAsync(_liveOwnerPath, cancellationToken)) as JsonObject;
         string? fingerprint = record?["fingerprint"]?.GetValue<string>();
         string? email = record?["email"]?.GetValue<string>();
         if (fingerprint is null || email is null)

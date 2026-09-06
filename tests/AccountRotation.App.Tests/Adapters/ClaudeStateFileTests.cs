@@ -121,6 +121,35 @@ public sealed class ClaudeStateFileTests : IDisposable
         result["oauthAccount"]!["emailAddress"]!.GetValue<string>().ShouldBe("b@example.com");
     }
 
+    [Fact]
+    public async Task PatchRetriesWhenTheFileChangesBetweenTheReadAndTheReplace()
+    {
+        // The CLI's own rewrites often keep the file's length (a counter ticking up) and
+        // can land inside one timestamp tick, so the change detector must compare bytes,
+        // not a length and a last-write time. The seam fires after the tool's read and
+        // before its replace; the rewrite it performs is invisible to a stamp check.
+        await File.WriteAllTextAsync(_path, LargeStateFile("a@example.com"), TestContext.Current.CancellationToken);
+        DateTime originalWrite = File.GetLastWriteTimeUtc(_path);
+        int hookCalls = 0;
+        ClaudeStateFile stateFile = new(_path, beforeReplace: async cancellationToken =>
+        {
+            if (hookCalls++ == 0)
+            {
+                string text = await File.ReadAllTextAsync(_path, cancellationToken);
+                await File.WriteAllTextAsync(_path, text.Replace("\"numStartups\": 412", "\"numStartups\": 413", StringComparison.Ordinal), cancellationToken);
+                File.SetLastWriteTimeUtc(_path, originalWrite);
+            }
+        });
+
+        await stateFile.PatchAccountBlockAsync(Account("b@example.com"), TestContext.Current.CancellationToken);
+
+        JsonNode result = JsonNode.Parse(await File.ReadAllTextAsync(_path, TestContext.Current.CancellationToken))!;
+        result["numStartups"]!.GetValue<int>().ShouldBe(413);
+        result["oauthAccount"]!["emailAddress"]!.GetValue<string>().ShouldBe("b@example.com");
+        hookCalls.ShouldBe(2);
+        Directory.GetFiles(_directory).ShouldBe([_path]);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_directory))
