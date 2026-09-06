@@ -579,7 +579,11 @@ to 5 except that Phase 2's `RateLimitGuardTeeFileReader` already parses the key 
   because a native Windows jq terminates lines with CRLF and only the last line was ever clean, a
   latent defect the two new lines exposed, fixed with the payload line left byte-for-byte intact;
   the non-spool paths, `RLG_TEE_ASYNC=1` and bash below 4.2, write no `account` key since they have
-  no spool file to date the state file against.) `plugins/rate-limit-guard/scripts/statusline-tee.sh`, **drain path only** (the render
+  no spool file to date the state file against. Codex review on claude-code-plugins#3778: the
+  staleness test now requires the spool record to be strictly newer than the state file, so equal
+  timestamps omit on coarse-mtime filesystems, and the value is validated on codepoints inside jq
+  before bash command substitution can strip a NUL or a trailing newline, with the bash checks kept
+  as a second layer.) `plugins/rate-limit-guard/scripts/statusline-tee.sh`, **drain path only** (the render
   path stays fork-free): after the batch jq chooses the record, resolve the state file
   (`$CLAUDE_CONFIG_DIR/.claude.json` when set, else `$HOME/.claude.json`) and read the identity with
   one `jq -r '.oauthAccount.emailAddress // empty' < "$state_file"` (bash opens the file, so the
@@ -601,7 +605,14 @@ to 5 except that Phase 2's `RateLimitGuardTeeFileReader` already parses the key 
   injected `account`; state file touched after the spool record → key absent; the existing zero-fork
   render trace case still passes.
 - [x] **6.4** (2026-09-05, worker W6; version `0.7.33` → `0.8.0`; the §6 paragraph changed is the
-  account-identity one, which precedes the guard-mode telemetry paragraph that actually closes §6.) Docs in the same PR: `reference/reader-contract.md` amends the floor's staleness bullet
+  account-identity one, which precedes the guard-mode telemetry paragraph that actually closes §6.
+  Two deviations forced by that repository's gates: its changelog-parity gate requires a bump and an
+  entry for every plugin whose files change, so the three carrier plugins moved too (docs-hygiene
+  `0.21.38`, source-control `0.55.55`, work-items `0.39.64`, one bullet each), and the plugin README
+  is a purged surface, so its new sentences carry no em dashes. One deviation from the wording below:
+  the `TODO(#1218)` pointers were replaced with present-tense statements of what is not built,
+  because #1218 is closed as not planned and claude-code-plugins#3770 had removed that pointer for
+  exactly that reason; the PR body cites the issue once as lineage.) Docs in the same PR: `reference/reader-contract.md` amends the floor's staleness bullet
   ("the file carries an `account.email` field when the writer could attribute the observation; a
   write is still the signal that the windows changed under you") and documents the key, its source,
   the staleness guard, and the recheck trigger (`oauthAccount.emailAddress` is internal CLI state)
@@ -612,7 +623,9 @@ to 5 except that Phase 2's `RateLimitGuardTeeFileReader` already parses the key 
   `CHANGELOG.md` entry; plugin version bump per the marketplace convention.
 - [x] **6.5** (2026-09-05: claude-code-plugins#3778, opened by the main session after a fresh-context
   verifier passed all eleven criteria; #1218 is closed as not planned, so the body cites it as `Refs`
-  with a `No related issue:` line rather than a closing keyword.) Open the PR with `/source-control:pull-request`; body references #1218, lists the
+  with a `No related issue:` line rather than a closing keyword. Two Codex findings fixed and every
+  CI lane green; squash-merged 2026-09-06 as `daa95f1de`, rate-limit-guard `0.8.0` is live on the
+  marketplace `main`. Phase 6 stays DOING for 6.6, which lands with Phase 2 here.) Open the PR with `/source-control:pull-request`; body references #1218, lists the
   consumers from 6.1, carries the timing numbers, and names the reader-side follow-up as out of scope.
 - [ ] **6.6** In this repo, `DashboardAssembler` treats a tee snapshot for the live account as
   unattributed ("pre-switch windows") when its `resets_at` values equal the outgoing account's last
