@@ -34,9 +34,21 @@ internal sealed class ClaudeCliProcessAuthStatus : IClaudeCliAuthStatus
             RedirectStandardError = true,
             CreateNoWindow = true,
         };
-        foreach (string argument in _executable.ArgumentPrefix.Concat(_statusArguments))
+        if (_executable.Shim is string shim)
         {
-            startInfo.ArgumentList.Add(argument);
+            // cmd.exe does not parse its command line by the argument-list rules, and an
+            // argument-list entry is quoted only when it holds a space or a quote, so a
+            // shim path carrying "&" would be read as a command separator. With /s the
+            // interpreter strips the outer quotes and runs the rest; the inner quotes keep
+            // the path one operand. A Windows path can never contain a quote itself.
+            startInfo.Arguments = "/d /s /c \"\"" + shim + "\" " + string.Join(' ', _statusArguments) + "\"";
+        }
+        else
+        {
+            foreach (string argument in _executable.ArgumentPrefix.Concat(_statusArguments))
+            {
+                startInfo.ArgumentList.Add(argument);
+            }
         }
 
         if (configDirectory is not null)

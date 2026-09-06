@@ -12,11 +12,27 @@ public sealed class ClaudeCliProcessAuthStatusTests : IDisposable
 
     public static bool OnWindows => OperatingSystem.IsWindows();
 
-    private ClaudeExecutable FakeCli(string body)
+    private ClaudeExecutable FakeCli(string body, string? directory = null)
     {
-        string path = Path.Combine(_root, "claude.cmd");
+        string folder = directory ?? _root;
+        Directory.CreateDirectory(folder);
+        string path = Path.Combine(folder, "claude.cmd");
         File.WriteAllText(path, "@echo off\r\n" + body + "\r\n");
-        return new ClaudeExecutable("cmd.exe", ["/c", path]);
+        return new ClaudeExecutable(Path.Combine(Environment.SystemDirectory, "cmd.exe"), [], Shim: path);
+    }
+
+    [Fact(SkipUnless = nameof(OnWindows), Skip = "The fake CLI is a Windows batch file")]
+    public async Task AShimPathHoldingACommandSeparatorIsRunAsOneOperand()
+    {
+        // "&" in a PATH entry or in the configured claudeExecutable must reach cmd.exe as
+        // part of the script's path, never as a second command.
+        ClaudeExecutable cli = FakeCli("echo {\"loggedIn\":true,\"email\":\"a@example.com\"}", Path.Combine(_root, "npm&tools"));
+        ClaudeCliProcessAuthStatus reader = new(cli, TimeSpan.FromSeconds(30));
+
+        Result<ClaudeAuthStatus, string> result = await reader.ReadAsync(null, TestContext.Current.CancellationToken);
+
+        result.IsSuccess.ShouldBeTrue(result.IsFailure ? result.Error : "");
+        result.Value.Email.ShouldBe("a@example.com");
     }
 
     [Fact(SkipUnless = nameof(OnWindows), Skip = "The fake CLI is a Windows batch file")]

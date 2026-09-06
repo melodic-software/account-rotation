@@ -4,11 +4,14 @@ namespace AccountRotation.App.Adapters.Process;
 
 /// <summary>
 /// How to start the CLI: the file to execute and the arguments that precede
-/// the CLI's own. A native binary runs directly; an npm <c>.cmd</c> shim runs
-/// through the command interpreter with an argument list, the one place a
-/// shell is involved, and never a joined command string.
+/// the CLI's own. A native binary runs directly with an argument list. An npm
+/// <c>.cmd</c> shim can only run through the command interpreter, and
+/// <c>cmd.exe</c> does not parse its command line by the argument-list rules,
+/// so <see cref="Shim"/> names the script and the process adapter builds the
+/// one quoted command line the interpreter needs; the interpreter itself is
+/// the system directory's, never one found on PATH.
 /// </summary>
-internal sealed record ClaudeExecutable(string FileName, IReadOnlyList<string> ArgumentPrefix);
+internal sealed record ClaudeExecutable(string FileName, IReadOnlyList<string> ArgumentPrefix, string? Shim = null);
 
 /// <summary>
 /// Resolves the <c>claude</c> executable: the <c>claudeExecutable</c> configuration
@@ -55,7 +58,11 @@ internal static class ClaudeExecutableLocator
     {
         bool isShim = isWindows && Path.GetExtension(path).Equals(".cmd", StringComparison.OrdinalIgnoreCase);
         return isShim
-            ? new ClaudeExecutable("cmd.exe", ["/c", path])
+            ? new ClaudeExecutable(SystemCommandInterpreter(), [], Shim: path)
             : new ClaudeExecutable(path, []);
     }
+
+    /// <summary>The interpreter from the system directory, by full path, never a bare name resolved through PATH or the current directory.</summary>
+    private static string SystemCommandInterpreter() =>
+        Path.Combine(OperatingSystem.IsWindows() ? Environment.SystemDirectory : string.Empty, "cmd.exe");
 }
