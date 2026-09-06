@@ -44,7 +44,7 @@ internal sealed class ClaudeStateFile
             return null;
         }
 
-        byte[] bytes = await File.ReadAllBytesAsync(Path, cancellationToken);
+        byte[] bytes = await SharedFileReader.ReadAllBytesAsync(Path, cancellationToken);
         AccountSpan? span = LocateAccountValue(bytes);
         if (span is null)
         {
