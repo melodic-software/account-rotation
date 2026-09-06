@@ -217,10 +217,18 @@ analyzer posture, with one real behavior under test so the test lane is proven b
   on the Phase 1 branch; `eng/dotnet-analysis/` blobs on `main` identical to the sync's; `.work`
   never staged; one merged sync PR).
 
-### Phase 1: Tracer bullet, machine-wide switch through the page [DOING]
+### Phase 1: Tracer bullet, machine-wide switch through the page [DONE]
 
 Review: security
 Review: concurrency
+
+Closed 2026-09-06 as account-rotation#3: the 1.5a probe and the live acceptance ran on the desktop
+with three sessions open (log in `tests/acceptance/README.md`); the security and concurrency
+reviews' Critical and Important findings are fixed in the same PR, the Suggestions are filed as
+issues #7 to #12, and a fresh-context verifier confirmed nineteen criteria at the merge head. The
+sanity check below holds with the test names as built (`ACrashBetweenUnparkAndPatchIsReconciledAtStartup`,
+`ConcurrentSwitchesSerializeAndLeaveOneHolderPerLineage`, `ConfigurationTests`); the
+switch-and-refresh serialization case waits for Phase 2's refresh client, as 1.5b records.
 
 The end-to-end slice: open the page, see the live account and every parked profile, click Switch,
 and every open Claude Code session bills the new account on its next request (AC 1, 2, 3, 9).
