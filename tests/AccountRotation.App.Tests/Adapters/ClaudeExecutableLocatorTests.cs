@@ -54,11 +54,11 @@ public sealed class ClaudeExecutableLocatorTests : IDisposable
     public void AnNpmShimRunsThroughTheSystemCommandInterpreterAsAShim()
     {
         string shimPath = Touch(Path.Combine("npm", "claude.cmd"));
+        string systemDirectory = Path.Combine(_root, "system32");
 
-        ClaudeExecutable located = ClaudeExecutableLocator.Locate(null, Path.GetDirectoryName(shimPath), isWindows: true).Value;
+        ClaudeExecutable located = ClaudeExecutableLocator.Locate(null, Path.GetDirectoryName(shimPath), isWindows: true, systemDirectory).Value;
 
-        Path.GetFileName(located.FileName).ShouldBe("cmd.exe");
-        Path.IsPathRooted(located.FileName).ShouldBeTrue("the interpreter is named by full path, never resolved through PATH");
+        located.FileName.ShouldBe(Path.Combine(systemDirectory, "cmd.exe"), "the interpreter is named by full path, never resolved through PATH");
         located.ArgumentPrefix.ShouldBeEmpty();
         located.Shim.ShouldBe(shimPath);
     }

@@ -117,7 +117,8 @@ internal static class AppComposition
         Result<ClaudeExecutable, string> located = ClaudeExecutableLocator.Locate(
             configuration.ClaudeExecutable,
             Environment.GetEnvironmentVariable("PATH"),
-            OperatingSystem.IsWindows());
+            OperatingSystem.IsWindows(),
+            Environment.SystemDirectory);
         return located.IsSuccess
             ? new ClaudeCliProcessAuthStatus(located.Value, _cliTimeout)
             : new UnavailableClaudeCliAuthStatus(located.Error);

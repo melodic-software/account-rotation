@@ -20,13 +20,14 @@ internal sealed record ClaudeExecutable(string FileName, IReadOnlyList<string> A
 /// </summary>
 internal static class ClaudeExecutableLocator
 {
-    public static Result<ClaudeExecutable, string> Locate(string? configuredExecutable, string? pathVariable, bool isWindows)
+    /// <param name="systemDirectory">Where the command interpreter lives (<see cref="Environment.SystemDirectory"/> on a real Windows machine); only consulted for an npm shim.</param>
+    public static Result<ClaudeExecutable, string> Locate(string? configuredExecutable, string? pathVariable, bool isWindows, string? systemDirectory = null)
     {
         if (!string.IsNullOrWhiteSpace(configuredExecutable))
         {
             string configured = Path.GetFullPath(configuredExecutable);
             return File.Exists(configured)
-                ? Result<ClaudeExecutable, string>.Success(Describe(configured, isWindows))
+                ? Result<ClaudeExecutable, string>.Success(Describe(configured, isWindows, systemDirectory))
                 : Result<ClaudeExecutable, string>.Failure("the configured claudeExecutable does not exist: " + configured);
         }
 
@@ -44,7 +45,7 @@ internal static class ClaudeExecutableLocator
                     string path = Path.Combine(directory, candidate);
                     if (File.Exists(path))
                     {
-                        return Result<ClaudeExecutable, string>.Success(Describe(path, isWindows));
+                        return Result<ClaudeExecutable, string>.Success(Describe(path, isWindows, systemDirectory));
                     }
                 }
             }
@@ -54,15 +55,18 @@ internal static class ClaudeExecutableLocator
             "no claude executable was found on PATH; set the claudeExecutable configuration key to its full path");
     }
 
-    private static ClaudeExecutable Describe(string path, bool isWindows)
+    private static ClaudeExecutable Describe(string path, bool isWindows, string? systemDirectory)
     {
         bool isShim = isWindows && Path.GetExtension(path).Equals(".cmd", StringComparison.OrdinalIgnoreCase);
         return isShim
-            ? new ClaudeExecutable(SystemCommandInterpreter(), [], Shim: path)
+            ? new ClaudeExecutable(SystemCommandInterpreter(systemDirectory), [], Shim: path)
             : new ClaudeExecutable(path, []);
     }
 
     /// <summary>The interpreter from the system directory, by full path, never a bare name resolved through PATH or the current directory.</summary>
-    private static string SystemCommandInterpreter() =>
-        Path.Combine(OperatingSystem.IsWindows() ? Environment.SystemDirectory : string.Empty, "cmd.exe");
+    private static string SystemCommandInterpreter(string? systemDirectory)
+    {
+        string directory = string.IsNullOrWhiteSpace(systemDirectory) ? Environment.SystemDirectory : systemDirectory;
+        return Path.Combine(directory, "cmd.exe");
+    }
 }
