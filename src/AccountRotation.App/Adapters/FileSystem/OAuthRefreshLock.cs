@@ -20,6 +20,7 @@ internal sealed partial class OAuthRefreshLock
 
     private const int WindowsErrorAlreadyExists = 183;
     private const int UnixErrorExists = 17;
+    private const int MaxStaleRemovals = 3;
     private static readonly TimeSpan _pollInterval = TimeSpan.FromMilliseconds(250);
 
     private readonly string _lockDirectory;
@@ -37,6 +38,7 @@ internal sealed partial class OAuthRefreshLock
     public async Task<Result<IAsyncDisposable, string>> AcquireAsync(TimeSpan waitBound, CancellationToken cancellationToken)
     {
         DateTimeOffset deadline = _timeProvider.GetUtcNow() + waitBound;
+        int staleRemovals = 0;
         while (true)
         {
             if (TryCreateExclusively(_lockDirectory))
@@ -44,9 +46,13 @@ internal sealed partial class OAuthRefreshLock
                 return Result<IAsyncDisposable, string>.Success(new Held(_lockDirectory));
             }
 
-            if (IsStale())
+            // A stale directory is removed and the create retried at once, but only a
+            // bounded number of times, and a removal that fails (an open handle, a
+            // read-only bit, a stray file inside) falls through to the deadline and the
+            // poll delay rather than spinning on the calling thread.
+            if (staleRemovals < MaxStaleRemovals && TryRemoveIfStale())
             {
-                TryRemove(_lockDirectory);
+                staleRemovals++;
                 continue;
             }
 
@@ -57,6 +63,40 @@ internal sealed partial class OAuthRefreshLock
             }
 
             await Task.Delay(_pollInterval, _timeProvider, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Removes the directory only if it is still stale at the moment of the delete:
+    /// the mtime is re-read right before the call, so a directory another process
+    /// re-created between the two reads is left alone. Returns whether it removed.
+    /// </summary>
+    private bool TryRemoveIfStale()
+    {
+        if (!IsStale())
+        {
+            return false;
+        }
+
+        try
+        {
+            if (!IsStale())
+            {
+                return false;
+            }
+
+            Directory.Delete(_lockDirectory);
+            return true;
+        }
+        catch (IOException)
+        {
+            // Another process removed or re-created it first, or the directory cannot be
+            // deleted (a stray file, an open handle); the caller waits and re-evaluates.
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
         }
     }
 
@@ -79,11 +119,11 @@ internal sealed partial class OAuthRefreshLock
         }
         catch (IOException)
         {
-            // Another process removed or re-created it first; the loop re-evaluates.
+            // Another process removed it first, or it holds a stray entry; nothing to do.
         }
         catch (UnauthorizedAccessException)
         {
-            // Same: leave it to the next iteration, which times out if it persists.
+            // Same: a held lock that cannot be released here is reclaimed as stale later.
         }
     }
 

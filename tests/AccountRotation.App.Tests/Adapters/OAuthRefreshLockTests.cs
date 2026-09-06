@@ -74,6 +74,24 @@ public sealed class OAuthRefreshLockTests : IDisposable
         Directory.Exists(_lockDirectory).ShouldBeFalse();
     }
 
+    [Fact]
+    public async Task RefusesAfterTheBoundWhenAStaleLockCannotBeRemoved()
+    {
+        // A stray file inside the directory makes the non-recursive delete fail, the
+        // way an open handle or a read-only bit does on a real machine.
+        Directory.CreateDirectory(_lockDirectory);
+        await File.WriteAllTextAsync(Path.Combine(_lockDirectory, "stray"), "x", TestContext.Current.CancellationToken);
+        Directory.SetLastWriteTimeUtc(_lockDirectory, DateTime.UtcNow.AddSeconds(-61));
+        OAuthRefreshLock refreshLock = new(_liveDirectory, TimeProvider.System);
+
+        Task<Result<IAsyncDisposable, string>> acquire = refreshLock.AcquireAsync(TimeSpan.FromMilliseconds(400), TestContext.Current.CancellationToken);
+        Task finished = await Task.WhenAny(acquire, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+
+        finished.ShouldBeSameAs(acquire, "the acquisition must honor the wait bound instead of spinning");
+        (await acquire).IsFailure.ShouldBeTrue();
+        Directory.Exists(_lockDirectory).ShouldBeTrue();
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_liveDirectory))
