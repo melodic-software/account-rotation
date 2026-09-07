@@ -1,4 +1,4 @@
-# account-rotation
+# claude-code-account-rotation
 
 Account switching and quota dashboard for Claude Code.
 
@@ -27,6 +27,18 @@ dotnet restore --locked-mode
 dotnet build -c Release --no-restore
 dotnet test -c Release --no-build
 ```
+
+## Upgrading from `account-rotation`
+
+The tool was named `account-rotation` until 2026-09-07. The executable, the User-Agent product
+token, and the per-user app data directory carry the new name, and the tool does not migrate the
+old directory. Stop the old executable, then move the directory once, contents unchanged:
+
+- Windows: `%LOCALAPPDATA%\account-rotation` to `%LOCALAPPDATA%\claude-code-account-rotation`.
+- Linux and macOS: `account-rotation` under the local application data directory (`~/.local/share`
+  unless `XDG_DATA_HOME` is set) to `claude-code-account-rotation` beside it.
+
+Parked profiles under `~/.claude-profiles` and Claude Code's own `~/.claude` are not affected.
 
 ## License
 

@@ -1,9 +1,9 @@
-# Type inventory: account-rotation
+# Type inventory: claude-code-account-rotation
 
 Light-form design, 2026-09-04. Naming follows the org's `naming.md`: verbose behavior-naming, no
 `Manager`/`Helper`/`Util`/`Service` suffixes, interfaces prefixed `I` (the `dotnet-analysis`
-component enforces the prefix and PascalCase). File-scoped namespaces `AccountRotation.Core.*` and
-`AccountRotation.App.*`. Records are immutable unless noted. Times are `DateTimeOffset` in UTC;
+component enforces the prefix and PascalCase). File-scoped namespaces `ClaudeCodeAccountRotation.Core.*` and
+`ClaudeCodeAccountRotation.App.*`. Records are immutable unless noted. Times are `DateTimeOffset` in UTC;
 elapsed time and "now" come from an injected `TimeProvider` (org `overlays/dotnet.md`).
 
 ## Core: identity and files
@@ -64,7 +64,7 @@ elapsed time and "now" come from an injected `TimeProvider` (org `overlays/dotne
 | `BrowserKind` | enum | `Chrome`, `Edge`, `Brave` | |
 | `RosterEntry` | sealed record | `AccountEmail Email`; `string? Alias`; `BrowserKind Browser`; `string? BrowserProfileDirectory`; `bool Paused`; `string? Notes` | |
 | `Roster` | sealed record | `int Version = 1`; `IReadOnlyList<RosterEntry> Accounts` | `With`-style helpers for add, pause, remove |
-| `AccountRotationConfiguration` | sealed record | `string LiveConfigDirectory`; `string ProfilesRoot`; `string StatuslineTeePath`; `int ListenPort`; `RoutingPolicy Routing`; `RefreshBudgetSettings Refresh`; `TimeSpan RefreshLockWaitBound`; `IReadOnlyDictionary<BrowserKind, string> BrowserExecutables`; `string UserAgentProductToken` | Defaults computed by `ConfigurationDefaults.ForCurrentUser()` at runtime; the shipped template holds no literal path |
+| `ClaudeCodeAccountRotationConfiguration` | sealed record | `string LiveConfigDirectory`; `string ProfilesRoot`; `string StatuslineTeePath`; `int ListenPort`; `RoutingPolicy Routing`; `RefreshBudgetSettings Refresh`; `TimeSpan RefreshLockWaitBound`; `IReadOnlyDictionary<BrowserKind, string> BrowserExecutables`; `string UserAgentProductToken` | Defaults computed by `ConfigurationDefaults.ForCurrentUser()` at runtime; the shipped template holds no literal path |
 
 ## Core: ports (six; interfaces only where T11 justifies one)
 

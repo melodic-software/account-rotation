@@ -11,7 +11,7 @@ set -euo pipefail
 live_dir="${1:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}"
 credential_file="$live_dir/.credentials.json"
 profile_url="https://api.anthropic.com/api/oauth/profile"
-user_agent="account-rotation-acceptance/1 (+https://github.com/melodic-software/account-rotation)"
+user_agent="claude-code-account-rotation-acceptance/1 (+https://github.com/melodic-software/claude-code-account-rotation)"
 
 [[ -f "$credential_file" ]] || { echo "no live credential file at $credential_file" >&2; exit 2; }
 

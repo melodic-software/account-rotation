@@ -4,7 +4,7 @@
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
   </PropertyGroup>
 
-  <!-- Versions follow the org's medley pins. AccountRotation.Core references no
+  <!-- Versions follow the org's medley pins. ClaudeCodeAccountRotation.Core references no
        package; the App's hosting and HTTP-factory types come from the
        Microsoft.AspNetCore.App framework reference. -->
   <ItemGroup Label="Testing">

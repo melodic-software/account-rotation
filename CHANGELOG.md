@@ -6,9 +6,17 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Changed
+
+- Renamed the project to `claude-code-account-rotation` (#5): the repository, the executable, the
+  User-Agent product token, the per-user app data directory, the mutation header
+  (`X-Claude-Code-Account-Rotation`), the solution and project names, and the
+  `ClaudeCodeAccountRotation.*` namespaces. An existing app data directory named `account-rotation`
+  is moved by hand once; see the README's upgrading note.
+
 ### Added
 
-- Solution skeleton: `AccountRotation.Core` (BCL only), `AccountRotation.App` (Kestrel on loopback),
+- Solution skeleton: `ClaudeCodeAccountRotation.Core` (BCL only), `ClaudeCodeAccountRotation.App` (Kestrel on loopback),
   and their test projects under the org's strict analyzer posture.
 - Machine-wide account switch: the loopback page lists the live account and every parked profile,
   and Switch parks the live credential pair, unparks the chosen one under Claude Code's own refresh

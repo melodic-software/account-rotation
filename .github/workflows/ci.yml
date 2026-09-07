@@ -37,13 +37,13 @@ jobs:
         with:
           global-json-file: global.json
       - name: Restore (locked mode)
-        run: dotnet restore AccountRotation.slnx --locked-mode
+        run: dotnet restore ClaudeCodeAccountRotation.slnx --locked-mode
       - name: Build
-        run: dotnet build AccountRotation.slnx -c Release --no-restore
+        run: dotnet build ClaudeCodeAccountRotation.slnx -c Release --no-restore
       - name: Test
-        run: dotnet test AccountRotation.slnx -c Release --no-build
+        run: dotnet test ClaudeCodeAccountRotation.slnx -c Release --no-build
       - name: Whitespace format
-        run: dotnet format whitespace AccountRotation.slnx --verify-no-changes
+        run: dotnet format whitespace ClaudeCodeAccountRotation.slnx --verify-no-changes
 
   gates:
     name: Repository gates
