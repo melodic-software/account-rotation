@@ -106,6 +106,46 @@ public sealed class RateLimitGuardTeeFileReaderTests : IDisposable
         snapshot.SevenDayPercent.ShouldBe(43);
     }
 
+    [Theory]
+    // DateTimeOffset.FromUnixTimeSeconds throws outside its own range, and this
+    // number comes from a file another process writes. Fail open per window.
+    [InlineData(1000000000000000000L)]
+    [InlineData(-1000000000000000000L)]
+    public async Task AnOutOfRangeResetTimeLeavesThatWindowsInstantUnknown(long absurd)
+    {
+        await WriteAsync(Tee("dev.a@example.com", fiveHourResetsAt: absurd));
+        RateLimitGuardTeeFileReader reader = new(_teePath);
+
+        StatuslineSnapshot snapshot = (await reader.ReadAsync(TestContext.Current.CancellationToken))!;
+
+        snapshot.FiveHourResetsAt.ShouldBeNull();
+        snapshot.FiveHourPercent.ShouldBe(69);
+        snapshot.SevenDayResetsAt.ShouldBe(DateTimeOffset.FromUnixTimeSeconds(1789315200));
+        snapshot.Account!.Value.Value.ShouldBe("dev.a@example.com");
+    }
+
+    [Fact]
+    public async Task AnOutOfRangeCapturedAtIsAnAbsentSnapshot()
+    {
+        await WriteAsync("""{"captured_at":1000000000000000000,"rate_limits":{"five_hour":{"used_percentage":69}}}""");
+        RateLimitGuardTeeFileReader reader = new(_teePath);
+
+        (await reader.ReadAsync(TestContext.Current.CancellationToken)).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task APathThatCannotBeOpenedIsAnAbsentSnapshot()
+    {
+        string blocked = Path.Combine(_directory, "blocked");
+        Directory.CreateDirectory(blocked);
+        // Pinned, because it is the reason the catch names this type: opening a
+        // directory as a file is an UnauthorizedAccessException, not an IOException.
+        Should.Throw<UnauthorizedAccessException>(() => new FileStream(blocked, FileMode.Open, FileAccess.Read));
+        RateLimitGuardTeeFileReader reader = new(blocked);
+
+        (await reader.ReadAsync(TestContext.Current.CancellationToken)).ShouldBeNull();
+    }
+
     /// <summary>The tee file as rate-limit-guard 0.8.0 writes it.</summary>
     internal static string Tee(string? email, long fiveHourResetsAt = 1788800400, long sevenDayResetsAt = 1789315200)
     {

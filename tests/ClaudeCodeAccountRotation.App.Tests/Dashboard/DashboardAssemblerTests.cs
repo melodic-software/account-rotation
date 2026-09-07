@@ -126,6 +126,31 @@ public sealed class DashboardAssemblerTests
         later.GetProperty("quotaNote").ValueKind.ShouldBe(JsonValueKind.Null);
     }
 
+    [Fact]
+    public async Task AnAbsurdResetTimeInTheTeeBreaksNeitherEndpoint()
+    {
+        // The tee is written by other processes. A number outside DateTimeOffset's
+        // range used to throw out of the read, and both endpoints read the tee, so
+        // one line of that file could 500 the page and the switch alike.
+        await using AppFactory factory = new();
+        await CredentialFiles.WriteAsync(factory.LiveDirectory, "outgoing-token", TestContext.Current.CancellationToken);
+        await factory.WriteStateFileAsync(OtherEmail, TestContext.Current.CancellationToken);
+        await factory.ParkedProfileAsync(LiveEmail, "incoming-token", TestContext.Current.CancellationToken);
+        factory.Cli.Email = LiveEmail;
+        await WriteTeeAsync(factory, RateLimitGuardTeeFileReaderTests.Tee(OtherEmail, fiveHourResetsAt: 1000000000000000000L));
+
+        using HttpClient client = factory.CreateMutatingClient();
+        using HttpResponseMessage dashboard = await client.GetAsync(new Uri("/api/dashboard", UriKind.Relative), TestContext.Current.CancellationToken);
+        using HttpResponseMessage switched = await client.PostAsync(
+            new Uri("/api/accounts/" + Uri.EscapeDataString(LiveEmail) + "/switch", UriKind.Relative),
+            content: null,
+            TestContext.Current.CancellationToken);
+
+        dashboard.StatusCode.ShouldBe(System.Net.HttpStatusCode.OK);
+        // The switch reached the planner and ran rather than failing on the tee read.
+        switched.StatusCode.ShouldBe(System.Net.HttpStatusCode.OK);
+    }
+
     private static async Task WriteTeeAsync(AppFactory factory, string content)
     {
         string path = Path.Combine(factory.LiveDirectory, "rate-limit-guard", "rate-limits.json");

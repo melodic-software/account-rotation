@@ -39,7 +39,7 @@ public static class UsageResponseParser
                 Text(entry, "group"),
                 Number(entry, "percent") ?? 0,
                 Text(entry, "severity"),
-                Instant(entry, "resets_at"),
+                JsonInstant.Read(entry, "resets_at"),
                 ScopeDisplayName(entry),
                 Flag(entry, "is_active") ?? true));
         }
@@ -92,26 +92,4 @@ public static class UsageResponseParser
             ? value.GetBoolean()
             : null;
 
-    /// <summary>
-    /// An instant the endpoint writes either as an ISO-8601 string (as the
-    /// top-level buckets did in spike 01) or as epoch seconds; both are read, so
-    /// a shape change on one side of the response does not blank a card.
-    /// </summary>
-    private static DateTimeOffset? Instant(JsonElement element, string name)
-    {
-        if (!element.TryGetProperty(name, out JsonElement value))
-        {
-            return null;
-        }
-
-        if (value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out long epochSeconds))
-        {
-            return DateTimeOffset.FromUnixTimeSeconds(epochSeconds);
-        }
-
-        return value.ValueKind == JsonValueKind.String
-            && DateTimeOffset.TryParse(value.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out DateTimeOffset instant)
-                ? instant
-                : null;
-    }
 }

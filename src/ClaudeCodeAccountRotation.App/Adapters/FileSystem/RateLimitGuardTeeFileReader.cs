@@ -22,17 +22,15 @@ internal sealed class RateLimitGuardTeeFileReader(string teeFilePath)
         byte[] bytes;
         try
         {
-            if (!File.Exists(_teeFilePath))
-            {
-                return null;
-            }
-
+            // No exists-then-open check: between the two the writer may rename its
+            // temp over this path, so the open is the only honest test. A missing
+            // file, a read landing in that rename window, and a path the user
+            // cannot read are all one thing here, a missing snapshot, never a
+            // failed dashboard.
             bytes = await SharedFileReader.ReadAllBytesAsync(_teeFilePath, cancellationToken);
         }
-        catch (IOException)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            // The writer renames a temp over this path; a read that lands in that
-            // window is a missing snapshot, never a failed dashboard.
             return null;
         }
 
@@ -50,7 +48,7 @@ internal sealed class RateLimitGuardTeeFileReader(string teeFilePath)
     private static StatuslineSnapshot? Snapshot(JsonElement root)
     {
         if (root.ValueKind != JsonValueKind.Object
-            || Instant(root, "captured_at") is not DateTimeOffset capturedAt
+            || JsonInstant.Read(root, "captured_at") is not DateTimeOffset capturedAt
             || !root.TryGetProperty("rate_limits", out JsonElement windows)
             || windows.ValueKind != JsonValueKind.Object)
         {
@@ -104,26 +102,7 @@ internal sealed class RateLimitGuardTeeFileReader(string teeFilePath)
             && value is >= 0 and <= 100
                 ? value
                 : null;
-        return (percent, Instant(window, "resets_at"));
-    }
-
-    /// <summary>Epoch seconds inside <c>rate_limits</c>, an ISO-8601 string for <c>captured_at</c>.</summary>
-    private static DateTimeOffset? Instant(JsonElement element, string name)
-    {
-        if (!element.TryGetProperty(name, out JsonElement value))
-        {
-            return null;
-        }
-
-        if (value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out long epochSeconds))
-        {
-            return DateTimeOffset.FromUnixTimeSeconds(epochSeconds);
-        }
-
-        return value.ValueKind == JsonValueKind.String
-            && DateTimeOffset.TryParse(value.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out DateTimeOffset instant)
-                ? instant
-                : null;
+        return (percent, JsonInstant.Read(window, "resets_at"));
     }
 
     private static string? Text(JsonElement element, string name) =>

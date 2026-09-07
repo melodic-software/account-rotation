@@ -63,6 +63,25 @@ public sealed class UsageResponseParserTests
         limit.ResetsAt.ShouldBe(DateTimeOffset.FromUnixTimeSeconds(1789315200));
     }
 
+    [Theory]
+    // The endpoint's number, not the tool's: out of DateTimeOffset's range it
+    // must leave the reset time unknown rather than throw out of the parse.
+    [InlineData(1000000000000000000L)]
+    [InlineData(-1000000000000000000L)]
+    public void AnOutOfRangeResetTimeLeavesTheLimitWithoutOne(long absurd)
+    {
+        using var body = JsonDocument.Parse(
+            """{"limits":[{"kind":"session","percent":43,"resets_at":"""
+            + absurd.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            + ""","is_active":true}]}""");
+
+        UsageLimit limit = UsageResponseParser.ParseLimits(body.RootElement).Value.Single();
+
+        limit.ResetsAt.ShouldBeNull();
+        limit.Percent.ShouldBe(43);
+        limit.Kind.ShouldBe(LimitKind.Session);
+    }
+
     [Fact]
     public void ABodyWithNoLimitsArrayFails()
     {
