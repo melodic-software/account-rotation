@@ -215,6 +215,82 @@ public sealed class LiveDirectorySwitchTests : IDisposable
     }
 
     [Fact]
+    public async Task ADirectoryThatCannotBeListedDoesNotFailReconciliation()
+    {
+        // The sweep enumerates lazily, so a directory that refuses to be listed
+        // used to throw from the foreach header, past every guard, and take the
+        // host's start with it.
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        string unlistable = Path.Combine(_profilesRoot, "b@example.com");
+        Directory.CreateDirectory(unlistable);
+        DenyListing(unlistable);
+        try
+        {
+            // Pinned: without a real throw here the rest of this test asserts nothing.
+            Should.Throw<UnauthorizedAccessException>(() => Directory.EnumerateFiles(unlistable, "*").ToList());
+
+            ReconciliationReport report = await Switch().ReconcileAsync(TestContext.Current.CancellationToken);
+
+            report.Quarantined.ShouldBeEmpty();
+            report.JournalOutcome.ShouldBe("no open journal");
+        }
+        finally
+        {
+            // Before Dispose deletes the tree, or the cleanup fails too.
+            AllowListing(unlistable);
+        }
+    }
+
+    private static void DenyListing(string directory)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            DenyListingOnWindows(directory);
+        }
+        else
+        {
+            File.SetUnixFileMode(directory, UnixFileMode.None);
+        }
+    }
+
+    private static void AllowListing(string directory)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            AllowListingOnWindows(directory);
+        }
+        else
+        {
+            File.SetUnixFileMode(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static void DenyListingOnWindows(string directory)
+    {
+        DirectoryInfo info = new(directory);
+        System.Security.AccessControl.DirectorySecurity security = info.GetAccessControl();
+        security.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(
+            System.Security.Principal.WindowsIdentity.GetCurrent().User!,
+            System.Security.AccessControl.FileSystemRights.ListDirectory,
+            System.Security.AccessControl.AccessControlType.Deny));
+        info.SetAccessControl(security);
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static void AllowListingOnWindows(string directory)
+    {
+        DirectoryInfo info = new(directory);
+        System.Security.AccessControl.DirectorySecurity security = info.GetAccessControl();
+        security.RemoveAccessRuleAll(new System.Security.AccessControl.FileSystemAccessRule(
+            System.Security.Principal.WindowsIdentity.GetCurrent().User!,
+            System.Security.AccessControl.FileSystemRights.ListDirectory,
+            System.Security.AccessControl.AccessControlType.Deny));
+        info.SetAccessControl(security);
+    }
+
+    [Fact]
     public async Task StartupDeletesATemporaryFileThatHoldsNoCredentialPair()
     {
         await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
