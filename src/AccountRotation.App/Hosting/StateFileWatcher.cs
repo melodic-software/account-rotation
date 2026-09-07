@@ -72,6 +72,16 @@ internal sealed partial class StateFileWatcher : BackgroundService
             {
                 LogRepairFailed(exception.Message);
             }
+            catch (ArgumentException exception)
+            {
+                // A parsable but malformed record or profile (an e-mail the identity type
+                // refuses); the service keeps watching rather than stopping silently.
+                LogRepairFailed(exception.Message);
+            }
+            catch (InvalidOperationException exception)
+            {
+                LogRepairFailed(exception.Message);
+            }
         }
     }
 
