@@ -309,7 +309,7 @@ internal sealed partial class LiveDirectorySwitch
     /// </summary>
     private async Task<string?> SweepOneAsync(string path, CancellationToken cancellationToken)
     {
-        if (!await HoldsACredentialPairAsync(path, cancellationToken))
+        if (!IsCredentialTemporary(path))
         {
             // The same sharing-violation retry every other file operation here uses:
             // a scanner holding a temp for a moment must not fail a startup.
@@ -373,17 +373,19 @@ internal sealed partial class LiveDirectorySwitch
     [GeneratedRegex(@"^\..+\.[0-9a-f]{32}\.tmp$", RegexOptions.CultureInvariant)]
     private static partial Regex OwnTemporaryName();
 
-    private static async Task<bool> HoldsACredentialPairAsync(string path, CancellationToken cancellationToken)
+    /// <summary>
+    /// Whether a temporary file was being written as a credential pair, decided
+    /// by the name it was going to take, never by parsing what is in it. A crash
+    /// can stop the write anywhere: a truncated temp holds bytes that are not
+    /// valid JSON and can still be the only copy of a rotated refresh token, so
+    /// parsing would delete exactly the file worth keeping.
+    /// </summary>
+    private static bool IsCredentialTemporary(string path)
     {
-        try
-        {
-            byte[] bytes = await SharedFileReader.ReadAllBytesAsync(path, cancellationToken);
-            return JsonNode.Parse(bytes) is JsonObject raw && CredentialPair.FromJson(raw).IsSuccess;
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
+        string name = Path.GetFileName(path);
+        // ".<intended name>.<32 hex>.tmp" as AtomicBytesFile forms it.
+        string intended = name[1..^(32 + ".".Length + ".tmp".Length)];
+        return intended.EndsWith(FileSystemCredentialPairStore.FileName, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool OnOneVolume(string first, string second) =>

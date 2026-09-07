@@ -33,6 +33,10 @@ public sealed class LiveDirectorySwitchTests : IDisposable
 
     private static JsonObject AccountJson(string email) => new() { ["accountUuid"] = "uuid-" + email, ["emailAddress"] = email };
 
+    /// <summary>A temporary file name in the shape <c>AtomicBytesFile</c> forms it.</summary>
+    private static string TemporaryName(string intendedFileName) =>
+        "." + intendedFileName + "." + Guid.NewGuid().ToString("N") + ".tmp";
+
     private async Task WriteStateFileAsync(string email, int startups = 7)
     {
         JsonObject state = new() { ["numStartups"] = startups, ["oauthAccount"] = AccountJson(email), ["trailing"] = "kept" };
@@ -176,7 +180,7 @@ public sealed class LiveDirectorySwitchTests : IDisposable
         await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
         await WriteStateFileAsync("a@example.com");
         string folder = await ParkedProfileAsync("b@example.com", "refresh-b");
-        string stranded = Path.Combine(folder, ".credentials.json." + Guid.NewGuid().ToString("N") + ".tmp");
+        string stranded = Path.Combine(folder, TemporaryName(CredentialFiles.FileName));
         await File.WriteAllTextAsync(stranded, CredentialFiles.Shape("refresh-rotated").ToJsonString(), TestContext.Current.CancellationToken);
 
         ReconciliationReport report = await Switch().ReconcileAsync(TestContext.Current.CancellationToken);
@@ -191,11 +195,31 @@ public sealed class LiveDirectorySwitchTests : IDisposable
     }
 
     [Fact]
+    public async Task StartupQuarantinesACredentialTemporaryThatIsTruncated()
+    {
+        // Power loss between the write and the flush leaves bytes that are not
+        // valid JSON, and those bytes can still be the only copy of a rotated
+        // refresh token. The name says what was being written; the contents do not.
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        string folder = await ParkedProfileAsync("b@example.com", "refresh-b");
+        string truncated = Path.Combine(folder, TemporaryName(CredentialFiles.FileName));
+        await File.WriteAllTextAsync(truncated, """{"claudeAiOauth":{"accessToken":"acc","refreshTok""", TestContext.Current.CancellationToken);
+
+        ReconciliationReport report = await Switch().ReconcileAsync(TestContext.Current.CancellationToken);
+
+        File.Exists(truncated).ShouldBeFalse();
+        string quarantined = report.Quarantined.ShouldHaveSingleItem();
+        (await File.ReadAllTextAsync(quarantined, TestContext.Current.CancellationToken)).ShouldContain("refreshTok");
+        report.SwitchingBlocked.ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task StartupDeletesATemporaryFileThatHoldsNoCredentialPair()
     {
         await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
         await WriteStateFileAsync("a@example.com");
-        string residue = Path.Combine(_liveDirectory, ".claude.json." + Guid.NewGuid().ToString("N") + ".tmp");
+        string residue = Path.Combine(_liveDirectory, TemporaryName(".claude.json"));
         await File.WriteAllTextAsync(residue, """{"numStartups":3}""", TestContext.Current.CancellationToken);
         // Not this writer's name shape, so it is another program's file and is left alone.
         string foreign = Path.Combine(_liveDirectory, "something.tmp");
@@ -218,9 +242,9 @@ public sealed class LiveDirectorySwitchTests : IDisposable
         Directory.CreateDirectory(Path.Combine(_appData, "recovery"));
         string[] stranded =
         [
-            Path.Combine(_liveDirectory, ".credentials.json." + Guid.NewGuid().ToString("N") + ".tmp"),
-            Path.Combine(folder, ".credentials.json." + Guid.NewGuid().ToString("N") + ".tmp"),
-            Path.Combine(_appData, "recovery", ".b.credentials.json." + Guid.NewGuid().ToString("N") + ".tmp"),
+            Path.Combine(_liveDirectory, TemporaryName(CredentialFiles.FileName)),
+            Path.Combine(folder, TemporaryName(CredentialFiles.FileName)),
+            Path.Combine(_appData, "recovery", TemporaryName("b.credentials.json")),
         ];
         foreach ((string path, int index) in stranded.Select(static (path, index) => (path, index)))
         {
