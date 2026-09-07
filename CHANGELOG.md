@@ -44,9 +44,8 @@ All notable changes to this project are documented in this file. The format foll
 
 - A swept temporary file is classified by the name it was going to take rather than by parsing it, so
   a write a crash truncated is quarantined rather than deleted: those bytes can be the only copy of a
-  rotated refresh token. `Authorization` is redacted from the HTTP factory's own request logging. A
-  401 refund is remembered for the rest of the window, so a rejected token cannot loop against the
-  endpoint without bound. A `Retry-After` is clamped to an hour.
+  rotated refresh token. A 401 refund is remembered for the rest of the window, so a rejected token
+  cannot loop against the endpoint without bound. A `Retry-After` is clamped to an hour.
 - Files this tool creates are readable by their owner alone on Windows as well as on Unix, and a
   temporary file a crash left behind is swept at startup: one holding a credential pair moves to
   quarantine, where the lineage scan and the operator can both see it, and any other is deleted

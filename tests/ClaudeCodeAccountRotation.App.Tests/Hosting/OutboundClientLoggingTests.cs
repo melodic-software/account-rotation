@@ -9,16 +9,20 @@ using Microsoft.Extensions.Logging;
 namespace ClaudeCodeAccountRotation.App.Tests.Hosting;
 
 /// <summary>
-/// The HTTP factory's own logging handler writes every request header at Trace.
-/// An access token in a log file outlives the token, so the composition redacts
-/// the header before the handler ever sees its value.
+/// The HTTP factory's logging handler names every header at Trace and redacts
+/// every value unless the registration names headers to keep, so a bearer token
+/// cannot reach a log file. This pins that: an access token in a log outlives
+/// the token itself. The User-Agent assertion is the load-bearing one, because
+/// it is the assertion that fails the moment someone "adds redaction" by naming
+/// headers, which narrows the default rather than widening it.
 /// </summary>
 public sealed class OutboundClientLoggingTests
 {
     private const string AccessToken = "an-access-token-that-must-never-be-logged";
+    private const string UserAgent = "claude-code-account-rotation/1.2.3 (+https://example.invalid)";
 
     [Fact]
-    public async Task TheAccessTokenNeverReachesALogLine()
+    public async Task NoHeaderValueReachesALogLine()
     {
         using CapturingLoggerProvider logs = new();
         ServiceCollection services = new();
@@ -27,7 +31,7 @@ public sealed class OutboundClientLoggingTests
             builder.SetMinimumLevel(LogLevel.Trace);
             builder.AddProvider(logs);
         });
-        AppComposition.AddOutboundClients(services, "claude-code-account-rotation/1.2.3 (+https://example.invalid)");
+        AppComposition.AddOutboundClients(services, UserAgent);
         // Nothing reaches the network: the factory's own handlers stay, only the
         // socket at the bottom of the chain is replaced.
         services.ConfigureHttpClientDefaults(builder =>
@@ -38,10 +42,12 @@ public sealed class OutboundClientLoggingTests
 
         (await client.ReadUsageAsync(AccessToken, TestContext.Current.CancellationToken)).Value.Dispose();
 
-        logs.Lines.ShouldNotBeEmpty("the logging handler must have run for this test to mean anything");
-        logs.Lines.ShouldAllBe(line => !line.Contains(AccessToken, StringComparison.Ordinal));
-        // The header is still named, so the redaction is visible rather than silent.
+        // The handler must have logged headers at all, or the rest asserts nothing.
         logs.Lines.ShouldContain(line => line.Contains("Authorization", StringComparison.Ordinal));
+        logs.Lines.ShouldAllBe(line => !line.Contains(AccessToken, StringComparison.Ordinal));
+        // Every value, not just the obvious one: naming headers to redact would
+        // narrow the framework default and let this one through.
+        logs.Lines.ShouldAllBe(line => !line.Contains(UserAgent, StringComparison.Ordinal));
     }
 
     private sealed class CapturingLoggerProvider : ILoggerProvider

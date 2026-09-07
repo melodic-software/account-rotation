@@ -27,7 +27,6 @@ internal static class AppComposition
     private const string ConfigPathSettingKey = "ClaudeCodeAccountRotation:ConfigPath";
     private const string ConfigFileName = "config.json";
     private static readonly TimeSpan _cliTimeout = TimeSpan.FromSeconds(30);
-    private static readonly string[] _redactedHeaders = ["Authorization"];
 
     public static string Version =>
         typeof(AppComposition).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
@@ -121,19 +120,18 @@ internal static class AppComposition
     /// <summary>
     /// The two outbound calls the tool ever makes, both on demand and never on a
     /// timer, each through the factory so no captive HttpClient outlives DNS.
-    /// The factory's own logging handler writes every request header at Trace,
-    /// so <c>Authorization</c> is redacted before it can carry an access token
-    /// into a log file. Registered here rather than inline so a test exercises
-    /// the same wiring the app runs.
+    /// The factory's logging handler names every header at Trace and redacts
+    /// every value unless told otherwise, which is what keeps a bearer token out
+    /// of a log file. Naming headers to redact would *narrow* that default, so
+    /// this deliberately names none. Registered here rather than inline so a
+    /// test exercises the same wiring the app runs.
     /// </summary>
     internal static void AddOutboundClients(IServiceCollection services, string userAgent)
     {
         ArgumentNullException.ThrowIfNull(services);
         services.AddHttpClient(nameof(AnthropicUsageEndpointClient))
-            .RedactLoggedHeaders(_redactedHeaders)
             .AddTypedClient<IUsageEndpointClient>(http => new AnthropicUsageEndpointClient(http, userAgent, TimeProvider.System));
         services.AddHttpClient(nameof(ClaudeOAuthTokenRefreshClient))
-            .RedactLoggedHeaders(_redactedHeaders)
             .AddTypedClient<ITokenRefreshClient>(http => new ClaudeOAuthTokenRefreshClient(http, userAgent, TimeProvider.System));
     }
 
