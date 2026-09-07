@@ -71,17 +71,40 @@ public sealed class RefreshBudgetTests
     }
 
     [Fact]
-    public void UnauthorizedResponsesConsumeNoBudget()
+    public void ALoopOfUnauthorizedResponsesStillRunsOutOfTheWindow()
     {
+        // A refund costs no gap, but it is remembered: a token the endpoint keeps
+        // rejecting must not buy an unbounded run of requests against it.
         TestClock clock = new(DateTimeOffset.Parse("2026-09-07T12:00:00Z", System.Globalization.CultureInfo.InvariantCulture));
         RefreshBudget budget = new(clock, minimumGapSinceLastRead: TimeSpan.Zero);
 
-        for (int attempt = 0; attempt < 20; attempt++)
+        for (int attempt = 0; attempt < 6; attempt++)
         {
-            budget.TryReserve(_accountA).ShouldBeTrue();
+            budget.TryReserve(_accountA).ShouldBeTrue("attempt " + attempt.ToString(System.Globalization.CultureInfo.InvariantCulture) + " should be allowed");
             budget.RecordUnauthorized(_accountA);
+            clock.Advance(TimeSpan.FromSeconds(30));
         }
 
+        budget.TryReserve(_accountA).ShouldBeFalse();
+
+        // And the window still slides: the refunds age out with the reads.
+        clock.Advance(TimeSpan.FromMinutes(5));
+        budget.TryReserve(_accountA).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void TheRetryAfterACredentialRefreshRidesTheOriginalReservation()
+    {
+        TestClock clock = new(DateTimeOffset.Parse("2026-09-07T12:00:00Z", System.Globalization.CultureInfo.InvariantCulture));
+        RefreshBudget budget = new(clock);
+
+        // Six accounts' worth of the window is not spent by one 401 and its retry.
+        budget.TryReserve(_accountA).ShouldBeTrue();
+        budget.RecordUnauthorized(_accountA);
+        clock.Advance(TimeSpan.FromSeconds(2));
+        budget.TryReserve(_accountA).ShouldBeTrue();
+
+        clock.Advance(TimeSpan.FromSeconds(61));
         budget.TryReserve(_accountA).ShouldBeTrue();
     }
 

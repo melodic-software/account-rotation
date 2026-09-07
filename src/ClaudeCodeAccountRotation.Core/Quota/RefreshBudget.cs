@@ -39,8 +39,9 @@ public sealed class RefreshBudget(
         {
             AccountBudget budget = Budget(account);
             budget.Reads.RemoveAll(read => now - read >= _window);
+            budget.Refunded.RemoveAll(read => now - read >= _window);
             if (budget.LockedOutUntil > now
-                || budget.Reads.Count >= _maxReadsPerWindow
+                || budget.Reads.Count + budget.Refunded.Count >= _maxReadsPerWindow
                 || (budget.Reads.Count > 0 && now - budget.Reads[^1] < _minimumGap))
             {
                 return false;
@@ -53,9 +54,12 @@ public sealed class RefreshBudget(
 
     /// <summary>
     /// Gives back the reservation a 401 consumed nothing of. The endpoint
-    /// rejected the token rather than serving the read, so it costs no budget
-    /// and does not start the gap clock: the single retry after a credential
-    /// refresh rides the original reservation.
+    /// rejected the token rather than serving the read, so it does not start the
+    /// gap clock and the single retry after a credential refresh rides the
+    /// original reservation. It is not free, though: the refund is remembered
+    /// for the rest of the window, so a token the endpoint keeps rejecting still
+    /// runs the account out of reads instead of looping against the endpoint
+    /// forever.
     /// </summary>
     public void RecordUnauthorized(AccountEmail account)
     {
@@ -63,6 +67,7 @@ public sealed class RefreshBudget(
         {
             if (_accounts.TryGetValue(account, out AccountBudget? budget) && budget.Reads.Count > 0)
             {
+                budget.Refunded.Add(budget.Reads[^1]);
                 budget.Reads.RemoveAt(budget.Reads.Count - 1);
             }
         }
@@ -103,6 +108,9 @@ public sealed class RefreshBudget(
     private sealed class AccountBudget
     {
         public List<DateTimeOffset> Reads { get; } = [];
+
+        /// <summary>Reads a 401 gave back: they count toward the window, not the gap.</summary>
+        public List<DateTimeOffset> Refunded { get; } = [];
 
         public DateTimeOffset? LockedOutUntil { get; set; }
     }
