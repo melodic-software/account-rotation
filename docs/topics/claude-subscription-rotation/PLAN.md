@@ -466,7 +466,7 @@ time, plus login expiry (AC 4). Behavioral references: `spike-usage-probe.py`,
 - `QuotaRefreshTests.WriteBackFailureParksTheRotatedPairInRecovery`: with the parked file made read-only after the token endpoint answers, the recovery file exists with the new fingerprint, the card reports a blocking error, and the next start restores the pair and deletes the recovery file.
 - `AtomicJsonFileTests.CreatesOwnerOnlyFilesOnUnix` (Linux CI leg): target mode `600`, no temp residue; `ReplacesAbsentTargetByMove` on both legs.
 - `QuotaRefreshTests.PausedPairNearLoginExpiryIsRefreshed`: a paused pair 5 days from login expiry gets one token POST; one 20 days out gets none.
-- Live acceptance (human): with ≥ 2 parked accounts, one idle > 8 h, click Refresh all; every card populated within 60 s (wall clock) with source and capture time; compare one card to that account's claude.ai Settings > Usage.
+- Live acceptance (human): with ≥ 2 parked accounts, one idle > 8 h, click Refresh all; every card populated within 60 s (wall clock) with source, capture time, and "login expires in N days"; compare one card to that account's claude.ai Settings > Usage.
 
 ### Phase 3: Ranking, queue, and switch proposals [TODO]
 
@@ -544,10 +544,10 @@ work item settles the login mechanism (design thread T8).
 **Sanity Check:**
 
 - `.work/claude-subscription-rotation/spike-05b-piped-login.md` exists and its first line matches `^# Spike 05b .* (PASS|FAIL)$`.
-- `dotnet test` exit 0; `RosterEndpointTests`: add → `Directory.Exists(<profiles>/<sanitized>)`; pause → absent from `/api/dashboard` queue, present in cards; remove → folder gone; remove on the live email → 409; adopt-live → roster contains the live email.
+- `dotnet test` exit 0; `RosterEndpointTests`: add → `Directory.Exists(<profiles>/<sanitized>)`; pause → `RosterFile` round-trips `Paused == true` and the card renders the paused state (exclusion from the ranked queue is asserted by Phase 3's `AccountRankingTests` `Paused` case, since the queue lands at 3.5); remove → folder gone; remove on the live email → 409; adopt-live → roster contains the live email.
 - `ChromiumFamilyBrowserLauncherTests`: recorded arguments equal `["--profile-directory=Profile 3", "<url>"]` for Chrome with profile `Profile 3`.
 - `grep -rln "UseShellExecute = true\|cmd.exe" src/ClaudeCodeAccountRotation.App/Adapters/` prints exactly one path, `src/ClaudeCodeAccountRotation.App/Adapters/Process/ClaudeExecutableLocator.cs` (the documented npm-shim exception); no other adapter shells out.
-- Live acceptance (human): Login for a parked account opens the roster's browser and profile with the email pre-filled; after completion `CLAUDE_CONFIG_DIR=<folder> claude auth status --json | jq -r .email` prints that email and the card shows "login expires in ~28 days".
+- Live acceptance (human): Login for a parked account opens the roster's browser and profile with the email pre-filled; after completion `CLAUDE_CONFIG_DIR=<folder> claude auth status --json | jq -r .email` prints that email and the card leaves "needs login" (the "login expires in N days" card text is 2.6 and is asserted in Phase 2's live acceptance).
 
 ### Phase 5: Packaging, portability, and release [TODO]
 
