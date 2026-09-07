@@ -62,16 +62,22 @@ internal static class ConfigurationFile
         ["userAgentProductToken"] = configuration.UserAgentProductToken,
     };
 
-    private static ClaudeCodeAccountRotationConfiguration Merge(ClaudeCodeAccountRotationConfiguration defaults, JsonObject raw) => new(
-        Text(raw, "liveConfigDirectory") ?? defaults.LiveConfigDirectory,
-        Text(raw, "stateFilePath") ?? defaults.StateFilePath,
-        Text(raw, "profilesRoot") ?? defaults.ProfilesRoot,
-        Text(raw, "appDataDirectory") ?? defaults.AppDataDirectory,
-        Text(raw, "statuslineTeePath") ?? defaults.StatuslineTeePath,
-        Number(raw, "listenPort") is double port ? (int)port : defaults.ListenPort,
-        Number(raw, "refreshLockWaitSeconds") is double seconds ? TimeSpan.FromSeconds(seconds) : defaults.RefreshLockWaitBound,
-        Text(raw, "claudeExecutable") ?? defaults.ClaudeExecutable,
-        Text(raw, "userAgentProductToken") ?? defaults.UserAgentProductToken);
+    private static ClaudeCodeAccountRotationConfiguration Merge(ClaudeCodeAccountRotationConfiguration defaults, JsonObject raw)
+    {
+        string liveConfigDirectory = Text(raw, "liveConfigDirectory") ?? defaults.LiveConfigDirectory;
+        return new ClaudeCodeAccountRotationConfiguration(
+            liveConfigDirectory,
+            Text(raw, "stateFilePath") ?? defaults.StateFilePath,
+            Text(raw, "profilesRoot") ?? defaults.ProfilesRoot,
+            Text(raw, "appDataDirectory") ?? defaults.AppDataDirectory,
+            // The tee lives inside the live directory, so a file that moves the live
+            // directory moves the tee with it unless it names one of its own.
+            Text(raw, "statuslineTeePath") ?? ConfigurationDefaults.TeePathFor(liveConfigDirectory),
+            Number(raw, "listenPort") is double port ? (int)port : defaults.ListenPort,
+            Number(raw, "refreshLockWaitSeconds") is double seconds ? TimeSpan.FromSeconds(seconds) : defaults.RefreshLockWaitBound,
+            Text(raw, "claudeExecutable") ?? defaults.ClaudeExecutable,
+            Text(raw, "userAgentProductToken") ?? defaults.UserAgentProductToken);
+    }
 
     private static string? Text(JsonObject raw, string key) =>
         raw[key] is JsonValue value && value.TryGetValue(out string? text) && !string.IsNullOrWhiteSpace(text) ? text : null;
