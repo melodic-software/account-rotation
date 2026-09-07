@@ -99,7 +99,7 @@ public sealed class AnthropicUsageEndpointClientTests
     }
 
     [Fact]
-    public async Task AnUnparseableBodyIsAMalformedBodyFailure()
+    public async Task AnUnparsableBodyIsAMalformedBodyFailure()
     {
         using RecordingHandler handler = new(RecordingHandler.Json(HttpStatusCode.OK, "{not json"));
         using HttpClient http = new(handler);

@@ -16,6 +16,18 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- Quota reads: the usage response's generic `limits[]` array and `extra_usage` block are parsed into
+  card-ready types, so the five-hour, weekly all-models, and any weekly scoped bucket render without
+  code changes when Anthropic adds or renames one.
+- Live-session quota from the `rate-limit-guard` tee file, the free tier of the refresh contract. A
+  card shows a snapshot only when the snapshot names that card's account, so the outgoing account's
+  windows are never read as the incoming account's after a switch. The tee path is a new
+  `statuslineTeePath` configuration key defaulting inside the live config directory.
+- A per-account refresh budget: six usage reads per five minutes with a sixty-second minimum gap and
+  a lockout honored from the endpoint's own `Retry-After`, driven by an injectable clock.
+- The two outbound adapters, for the usage endpoint and the OAuth token endpoint, each sending an
+  honest User-Agent naming the tool, its version, and its home, with a twenty-second timeout and
+  typed failures. The token refresh returns the rotated tokens to its caller and writes nothing.
 - Solution skeleton: `ClaudeCodeAccountRotation.Core` (BCL only), `ClaudeCodeAccountRotation.App` (Kestrel on loopback),
   and their test projects under the org's strict analyzer posture.
 - Machine-wide account switch: the loopback page lists the live account and every parked profile,
@@ -27,3 +39,10 @@ All notable changes to this project are documented in this file. The format foll
 - Configuration under the per-user app data directory with every path derived at runtime, refusing
   a profiles root on another volume, inside the live directory, or under a sync folder.
 - Acceptance runbook and scripts under `tests/acceptance/` for the criteria that need real sessions.
+
+### Fixed
+
+- Files this tool creates are readable by their owner alone on Windows as well as on Unix, and a
+  temporary file a crash left behind is swept at startup: one holding a credential pair moves to
+  quarantine, where the lineage scan and the operator can both see it, and any other is deleted
+  (#10).

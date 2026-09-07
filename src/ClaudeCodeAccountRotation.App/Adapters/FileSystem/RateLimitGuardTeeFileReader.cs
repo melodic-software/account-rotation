@@ -73,7 +73,7 @@ internal sealed class RateLimitGuardTeeFileReader(string teeFilePath)
     /// The tee's account identity. The reader contract calls every value in this
     /// file untrusted and warns that a future account field may be an object of
     /// arbitrary strings, so the e-mail goes through <see cref="AccountEmail.Parse"/>
-    /// and an unparseable one leaves the snapshot unattributed.
+    /// and an unparsable one leaves the snapshot unattributed.
     /// </summary>
     private static AccountEmail? AccountEmailOf(JsonElement root)
     {

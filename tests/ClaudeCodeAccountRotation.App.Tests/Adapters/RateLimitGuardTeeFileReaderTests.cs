@@ -79,7 +79,7 @@ public sealed class RateLimitGuardTeeFileReaderTests : IDisposable
 
     [Theory]
     // The reader contract calls every value here untrusted: an object where a
-    // string belongs, and an unparseable address, both leave it unattributed.
+    // string belongs, and an unparsable address, both leave it unattributed.
     [InlineData("""{"uuid":"u-1"}""")]
     [InlineData("\"not-an-email\"")]
     public async Task AnUntrustworthyAccountValueLeavesTheSnapshotUnattributed(string accountValue)

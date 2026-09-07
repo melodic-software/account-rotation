@@ -168,6 +168,72 @@ public sealed class LiveDirectorySwitchTests : IDisposable
     }
 
     [Fact]
+    public async Task StartupQuarantinesACredentialPairLeftInATemporaryFile()
+    {
+        // What a crash between this writer's temp write and its rename leaves: a
+        // refresh token in a file neither the lineage scan nor the single-holder
+        // check would ever match, because both look only for .credentials.json.
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        string folder = await ParkedProfileAsync("b@example.com", "refresh-b");
+        string stranded = Path.Combine(folder, ".credentials.json." + Guid.NewGuid().ToString("N") + ".tmp");
+        await File.WriteAllTextAsync(stranded, CredentialFiles.Shape("refresh-rotated").ToJsonString(), TestContext.Current.CancellationToken);
+
+        ReconciliationReport report = await Switch().ReconcileAsync(TestContext.Current.CancellationToken);
+
+        File.Exists(stranded).ShouldBeFalse();
+        string quarantined = report.Quarantined.ShouldHaveSingleItem();
+        quarantined.ShouldContain("-temp-b@example.com");
+        (await CredentialFiles.FingerprintAsync(Path.GetDirectoryName(quarantined)!, TestContext.Current.CancellationToken)).ShouldBeNull();
+        JsonNode.Parse(await File.ReadAllTextAsync(quarantined, TestContext.Current.CancellationToken))!["claudeAiOauth"]!["refreshToken"]!
+            .GetValue<string>().ShouldBe("refresh-rotated");
+        report.SwitchingBlocked.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task StartupDeletesATemporaryFileThatHoldsNoCredentialPair()
+    {
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        string residue = Path.Combine(_liveDirectory, ".claude.json." + Guid.NewGuid().ToString("N") + ".tmp");
+        await File.WriteAllTextAsync(residue, """{"numStartups":3}""", TestContext.Current.CancellationToken);
+        // Not this writer's name shape, so it is another program's file and is left alone.
+        string foreign = Path.Combine(_liveDirectory, "something.tmp");
+        await File.WriteAllTextAsync(foreign, "not ours", TestContext.Current.CancellationToken);
+
+        ReconciliationReport report = await Switch().ReconcileAsync(TestContext.Current.CancellationToken);
+
+        File.Exists(residue).ShouldBeFalse();
+        File.Exists(foreign).ShouldBeTrue();
+        report.Quarantined.ShouldBeEmpty();
+        report.SwitchingBlocked.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task TheSweepReachesTheLiveDirectoryTheProfilesAndAppData()
+    {
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        string folder = await ParkedProfileAsync("b@example.com", "refresh-b");
+        Directory.CreateDirectory(Path.Combine(_appData, "recovery"));
+        string[] stranded =
+        [
+            Path.Combine(_liveDirectory, ".credentials.json." + Guid.NewGuid().ToString("N") + ".tmp"),
+            Path.Combine(folder, ".credentials.json." + Guid.NewGuid().ToString("N") + ".tmp"),
+            Path.Combine(_appData, "recovery", ".b.credentials.json." + Guid.NewGuid().ToString("N") + ".tmp"),
+        ];
+        foreach ((string path, int index) in stranded.Select(static (path, index) => (path, index)))
+        {
+            await File.WriteAllTextAsync(path, CredentialFiles.Shape("rotated-" + index.ToString(System.Globalization.CultureInfo.InvariantCulture)).ToJsonString(), TestContext.Current.CancellationToken);
+        }
+
+        ReconciliationReport report = await Switch().ReconcileAsync(TestContext.Current.CancellationToken);
+
+        report.Quarantined.Count.ShouldBe(3);
+        stranded.ShouldAllBe(path => !File.Exists(path));
+    }
+
+    [Fact]
     public async Task ACrashBetweenUnparkAndPatchIsReconciledAtStartup()
     {
         // Files as the switch leaves them after the unpark: b's pair is live, a's is parked,

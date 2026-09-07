@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Identity;
@@ -143,13 +144,16 @@ internal sealed partial class LiveDirectorySwitch
     public async Task<ReconciliationReport> ReconcileAsync(CancellationToken cancellationToken)
     {
         using IDisposable permit = await _gate.AcquireAsync(_options.MutationGateTimeout, cancellationToken);
-        IReadOnlyList<string> quarantined = await QuarantineDuplicateLineagesAsync(cancellationToken);
+        (IReadOnlyList<string> sweptTemporaries, IReadOnlyList<string> stranded) = await SweepTemporariesAsync(cancellationToken);
+        IReadOnlyList<string> quarantined = [.. sweptTemporaries, .. await QuarantineDuplicateLineagesAsync(cancellationToken)];
         (string journalOutcome, bool journalBlocks) = await ReconcileJournalAsync(cancellationToken);
         bool quarantineBlocks = QuarantineHoldsFiles();
-        string? banner = quarantineBlocks
-            ? "A duplicate credential lineage was quarantined under " + _quarantineDirectory + "; delete or restore those files before switching."
-            : journalBlocks ? "An earlier switch could not be reconciled: " + journalOutcome : null;
-        return new ReconciliationReport(quarantined, journalOutcome, quarantineBlocks || journalBlocks, banner);
+        string? banner = stranded.Count > 0
+            ? "A credential pair was left in a temporary file that could not be moved to safety: " + string.Join(", ", stranded) + "; move or delete it before switching."
+            : quarantineBlocks
+                ? "A duplicate credential lineage was quarantined under " + _quarantineDirectory + "; delete or restore those files before switching."
+                : journalBlocks ? "An earlier switch could not be reconciled: " + journalOutcome : null;
+        return new ReconciliationReport(quarantined, journalOutcome, quarantineBlocks || journalBlocks || stranded.Count > 0, banner);
     }
 
     private async Task<Result<SwitchOutcome, SwitchRefusal>> SwitchUnderGateAsync(AccountEmail target, CancellationToken cancellationToken)
@@ -258,6 +262,111 @@ internal sealed partial class LiveDirectorySwitch
             pair?.Fingerprint,
             _pairs.FreshLockFileName(_secondaryLockGuardAge));
     }
+
+    /// <summary>
+    /// Clears this writer's own temporary files, which a crash between the temp
+    /// write and the rename leaves behind. A temp that parses as a credential
+    /// pair is the dangerous one: it holds a refresh token that neither the
+    /// lineage scan nor the single-holder check would ever match, because both
+    /// look only for <c>.credentials.json</c>, and after a write-back it may
+    /// hold the only live token of its lineage. Those move to quarantine, where
+    /// the operator can see them and the lineage scan does not; any other
+    /// leftover temp is deleted. Nothing of this tool's can be in flight here:
+    /// the sweep runs at startup, under the mutation gate, and the instance lock
+    /// rules out a second copy of the tool.
+    /// </summary>
+    private async Task<(IReadOnlyList<string> Quarantined, IReadOnlyList<string> Stranded)> SweepTemporariesAsync(CancellationToken cancellationToken)
+    {
+        List<string> quarantined = [];
+        List<string> stranded = [];
+        foreach (string path in TemporaryFiles())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!await HoldsACredentialPairAsync(path, cancellationToken))
+            {
+                File.Delete(path);
+                continue;
+            }
+
+            string stamp = _timeProvider.GetUtcNow().ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture);
+            string destinationDirectory = Path.Combine(_quarantineDirectory, stamp + "-temp-" + Path.GetFileName(Path.GetDirectoryName(path)!));
+            string destination = Path.Combine(destinationDirectory, Path.GetFileName(path));
+            if (File.Exists(destination) || !OnOneVolume(path, destination))
+            {
+                // Never a copy: a second holder of a refresh token is the one thing
+                // this tool refuses to create, so the file stays where it is and the
+                // banner sends the operator to it.
+                stranded.Add(path);
+                LogStrandedTemporary(path);
+                continue;
+            }
+
+            Directory.CreateDirectory(destinationDirectory);
+            File.Move(path, destination);
+            quarantined.Add(destination);
+            LogQuarantined(path, destination, "credential temporary");
+        }
+
+        return (quarantined, stranded);
+    }
+
+    /// <summary>
+    /// This writer's temp names only: <c>.&lt;name&gt;.&lt;32 hex&gt;.tmp</c>, as
+    /// <see cref="AtomicBytesFile"/> forms them. The CLI's own in-flight temps do
+    /// not match that shape and are never touched.
+    /// </summary>
+    private IEnumerable<string> TemporaryFiles()
+    {
+        List<string> roots = [_options.LiveConfigDirectory];
+        if (Directory.Exists(_options.ProfilesRoot))
+        {
+            roots.AddRange(Directory.EnumerateDirectories(_options.ProfilesRoot));
+        }
+
+        foreach (string root in roots.Where(Directory.Exists))
+        {
+            foreach (string path in Directory.EnumerateFiles(root, ".*.tmp", SearchOption.TopDirectoryOnly).Where(IsOwnTemporary))
+            {
+                yield return path;
+            }
+        }
+
+        if (Directory.Exists(_options.AppDataDirectory))
+        {
+            // App data holds the journal, the owner record, the snapshot cache, and
+            // the recovery files, in nested directories, so this leg goes deep. The
+            // quarantine itself is skipped: its contents are already at rest.
+            foreach (string path in Directory.EnumerateFiles(_options.AppDataDirectory, ".*.tmp", SearchOption.AllDirectories)
+                .Where(path => IsOwnTemporary(path) && !path.StartsWith(_quarantineDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)))
+            {
+                yield return path;
+            }
+        }
+    }
+
+    private static bool IsOwnTemporary(string path) => OwnTemporaryName().IsMatch(Path.GetFileName(path));
+
+    [GeneratedRegex(@"^\..+\.[0-9a-f]{32}\.tmp$", RegexOptions.CultureInvariant)]
+    private static partial Regex OwnTemporaryName();
+
+    private static async Task<bool> HoldsACredentialPairAsync(string path, CancellationToken cancellationToken)
+    {
+        try
+        {
+            byte[] bytes = await SharedFileReader.ReadAllBytesAsync(path, cancellationToken);
+            return JsonNode.Parse(bytes) is JsonObject raw && CredentialPair.FromJson(raw).IsSuccess;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool OnOneVolume(string first, string second) =>
+        string.Equals(
+            Path.GetPathRoot(Path.GetFullPath(first)),
+            Path.GetPathRoot(Path.GetFullPath(second)),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
     private async Task<IReadOnlyList<string>> QuarantineDuplicateLineagesAsync(CancellationToken cancellationToken)
     {
@@ -501,6 +610,9 @@ internal sealed partial class LiveDirectorySwitch
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "quarantined a duplicate credential lineage {Fingerprint}: {Source} -> {Destination}")]
     private partial void LogQuarantined(string source, string destination, string fingerprint);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "a temporary file at {Source} holds a credential pair and could not be moved to quarantine; it stays where it is and switching is blocked")]
+    private partial void LogStrandedTemporary(string source);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "journal reconciliation {Outcome} for {Incoming}")]
     private partial void LogReconciled(string outcome, string incoming);
