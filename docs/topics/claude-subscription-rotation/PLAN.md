@@ -407,7 +407,7 @@ Behavioral reference: `spike-04-swap.py` (memory slice), guard for guard.
 - `SwitchEndpointTests`: `POST /api/accounts/{email}/switch` without `X-Claude-Code-Account-Rotation` → 403; with a cross-site `Origin` → 403; with a non-loopback `Host` → 400; with a fresh `.oauth_refresh.lock` directory in the temp live dir → 409 `RefreshLockPresent`; with a parked pair whose login expired → 409 `TargetLoginExpired`; two concurrent switch requests → one 200 and one 409.
 - Live acceptance on this desktop (human observes, recorded in `tests/acceptance/README.md` log): with **three** sessions open, click Switch; `/status` in all three shows the new email after one message; `claude auth status --json | jq -r .email` matches; `bash tests/acceptance/check-single-holder.sh <profiles-root> <live-dir>` prints `duplicates=0` and exits 0; a subagent fan-out started before the switch completes without error (AC 2); then run several turns in an old session and start and stop a fresh session, and `jq -r .oauthAccount.emailAddress <live-state-file>` still prints the incoming email (state-file drift probe); once per acceptance run, `bash tests/acceptance/check-live-identity.sh` makes a single honest-UA `GET /api/oauth/profile` with the live access token and prints the billed email, which must match.
 
-### Phase 2: Quota reads and parked-pair credential refresh [TODO]
+### Phase 2: Quota reads and parked-pair credential refresh [DOING]
 
 Review: security
 
@@ -430,9 +430,9 @@ time, plus login expiry (AC 4). Behavioral references: `spike-usage-probe.py`,
 - [ ] **2.2** `StatuslineSnapshot` + `RateLimitGuardTeeFileReader` (tolerates a missing file, torn
   JSON, missing `rate_limits`, and reads `account.email` when present).
 - [ ] **2.3** `RefreshBudget` (`TimeProvider`-driven sliding window: 6 reads per account per 5 min,
-  60-second minimum gap, lockout until `Retry-After`). A 401 response consumes no budget and does
-  not start the gap clock, so the single retry after a credential refresh rides the original
-  reservation.
+  60-second minimum gap, lockout until `Retry-After`). The first 401 on a reservation refunds it and
+  does not start the gap clock, so the single retry after a credential refresh rides the original
+  reservation; a second 401 on the same reservation is not refunded (PR #15 security review).
 - [ ] **2.4** Ports `IUsageEndpointClient`, `ITokenRefreshClient`; adapters
   `AnthropicUsageEndpointClient` and `ClaudeOAuthTokenRefreshClient` via `IHttpClientFactory` typed
   clients, 20-second timeout, `User-Agent: claude-code-account-rotation/<version> (+https://github.com/melodic-software/claude-code-account-rotation)`,
