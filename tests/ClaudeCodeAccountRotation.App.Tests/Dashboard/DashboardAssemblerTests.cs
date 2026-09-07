@@ -116,6 +116,14 @@ public sealed class DashboardAssemblerTests
 
         fresh.GetProperty("quota").GetProperty("fiveHourPercent").GetDouble().ShouldBe(69);
         fresh.GetProperty("quotaNote").ValueKind.ShouldBe(JsonValueKind.Null);
+
+        // And the stash is spent, not merely stepped over: the same reset times
+        // again are now this account's own, because the windows have moved on once.
+        await WriteTeeAsync(factory, RateLimitGuardTeeFileReaderTests.Tee(LiveEmail));
+        JsonElement later = await LiveCardAsync(factory, client);
+
+        later.GetProperty("quota").GetProperty("sevenDayPercent").GetDouble().ShouldBe(43);
+        later.GetProperty("quotaNote").ValueKind.ShouldBe(JsonValueKind.Null);
     }
 
     private static async Task WriteTeeAsync(AppFactory factory, string content)

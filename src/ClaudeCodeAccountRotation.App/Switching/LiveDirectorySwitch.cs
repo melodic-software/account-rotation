@@ -282,32 +282,56 @@ internal sealed partial class LiveDirectorySwitch
         foreach (string path in TemporaryFiles())
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!await HoldsACredentialPairAsync(path, cancellationToken))
+            try
             {
-                File.Delete(path);
-                continue;
+                if (await SweepOneAsync(path, cancellationToken) is string destination)
+                {
+                    quarantined.Add(destination);
+                    continue;
+                }
             }
-
-            string stamp = _timeProvider.GetUtcNow().ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture);
-            string destinationDirectory = Path.Combine(_quarantineDirectory, stamp + "-temp-" + Path.GetFileName(Path.GetDirectoryName(path)!));
-            string destination = Path.Combine(destinationDirectory, Path.GetFileName(path));
-            if (File.Exists(destination) || !OnOneVolume(path, destination))
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
-                // Never a copy: a second holder of a refresh token is the one thing
-                // this tool refuses to create, so the file stays where it is and the
-                // banner sends the operator to it.
-                stranded.Add(path);
+                // Startup runs before anything else can work, so an unreadable or
+                // held temp reports itself rather than taking the app down with it.
                 LogStrandedTemporary(path);
-                continue;
+                stranded.Add(path);
             }
-
-            Directory.CreateDirectory(destinationDirectory);
-            File.Move(path, destination);
-            quarantined.Add(destination);
-            LogQuarantined(path, destination, "credential temporary");
         }
 
         return (quarantined, stranded);
+    }
+
+    /// <summary>
+    /// Deals with one temporary file: returns its quarantine path when it held a
+    /// credential pair, null when it was deleted as ordinary residue. Refuses,
+    /// by throwing, to move a pair anywhere it would have to be copied.
+    /// </summary>
+    private async Task<string?> SweepOneAsync(string path, CancellationToken cancellationToken)
+    {
+        if (!await HoldsACredentialPairAsync(path, cancellationToken))
+        {
+            // The same sharing-violation retry every other file operation here uses:
+            // a scanner holding a temp for a moment must not fail a startup.
+            await AtomicBytesFile.DeleteWithRetryAsync(path, cancellationToken);
+            return null;
+        }
+
+        string stamp = _timeProvider.GetUtcNow().ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture);
+        string destinationDirectory = Path.Combine(_quarantineDirectory, stamp + "-temp-" + Path.GetFileName(Path.GetDirectoryName(path)!));
+        string destination = Path.Combine(destinationDirectory, Path.GetFileName(path));
+        if (File.Exists(destination) || !OnOneVolume(path, destination))
+        {
+            // Never a copy: a second holder of a refresh token is the one thing this
+            // tool refuses to create, so the file stays where it is and the banner
+            // sends the operator to it.
+            throw new IOException("Refusing to move " + path + " to " + destination + ": a credential pair moves by rename or not at all.");
+        }
+
+        Directory.CreateDirectory(destinationDirectory);
+        await AtomicBytesFile.MoveIntoPlaceWithRetryAsync(path, destination, cancellationToken);
+        LogQuarantined(path, destination, "credential temporary");
+        return destination;
     }
 
     /// <summary>

@@ -50,7 +50,7 @@ public sealed class RateLimitGuardTeeFileReaderTests : IDisposable
         StatuslineSnapshot snapshot = (await reader.ReadAsync(TestContext.Current.CancellationToken))!;
 
         snapshot.CapturedAt.ShouldBe(DateTimeOffset.Parse("2026-09-07T15:33:52Z", System.Globalization.CultureInfo.InvariantCulture));
-        snapshot.SessionId.ShouldBe("5215bc84-2fa7-442e-8638-cef703f1a48c");
+        snapshot.SessionId.ShouldBe("00000000-0000-4000-8000-000000000001");
         snapshot.FiveHourPercent.ShouldBe(69);
         snapshot.FiveHourResetsAt.ShouldBe(DateTimeOffset.FromUnixTimeSeconds(1788800400));
         snapshot.SevenDayPercent.ShouldBe(43);
@@ -112,7 +112,7 @@ public sealed class RateLimitGuardTeeFileReaderTests : IDisposable
         JsonObject tee = new()
         {
             ["captured_at"] = "2026-09-07T15:33:52Z",
-            ["session_id"] = "5215bc84-2fa7-442e-8638-cef703f1a48c",
+            ["session_id"] = "00000000-0000-4000-8000-000000000001",
             ["session_name"] = "a session",
             ["rate_limits"] = new JsonObject
             {

@@ -1,3 +1,5 @@
+using ClaudeCodeAccountRotation.Core.Identity;
+
 namespace ClaudeCodeAccountRotation.Core.Quota;
 
 /// <summary>
@@ -11,4 +13,14 @@ public sealed record RefreshedTokens(
     string RefreshToken,
     DateTimeOffset AccessTokenExpiresAt,
     DateTimeOffset? LoginExpiresAt,
-    IReadOnlyList<string> Scopes);
+    IReadOnlyList<string> Scopes)
+{
+    public RefreshTokenFingerprint Fingerprint { get; } = RefreshTokenFingerprint.FromRefreshToken(RefreshToken);
+
+    /// <summary>
+    /// The fingerprint, never the tokens. A record's generated
+    /// <c>ToString</c> prints every property, and one interpolation of this
+    /// type into a log line would put a live refresh token on disk.
+    /// </summary>
+    public override string ToString() => "RefreshedTokens(" + Fingerprint.Sha256Hex[..12] + ")";
+}
