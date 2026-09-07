@@ -126,6 +126,42 @@ public sealed class DashboardAssemblerTests
     }
 
     [Fact]
+    public async Task ASwitchWithNoReadableTeeClearsAnEarlierStash()
+    {
+        // Two switches. The first stashes the outgoing windows; the second cannot
+        // read the tee, and must not leave the first switch's values behind to
+        // disown a later account's own snapshot whose reset times happen to match.
+        await using AppFactory factory = new();
+        await CredentialFiles.WriteAsync(factory.LiveDirectory, "outgoing-token", TestContext.Current.CancellationToken);
+        await factory.WriteStateFileAsync(OtherEmail, TestContext.Current.CancellationToken);
+        await factory.ParkedProfileAsync(LiveEmail, "incoming-token", TestContext.Current.CancellationToken);
+        factory.Cli.Email = LiveEmail;
+        await WriteTeeAsync(factory, RateLimitGuardTeeFileReaderTests.Tee(OtherEmail));
+
+        using HttpClient client = factory.CreateMutatingClient();
+        await SwitchAsync(client, LiveEmail);
+
+        // Back the other way, with the tee gone at switch time.
+        File.Delete(Path.Combine(factory.LiveDirectory, "rate-limit-guard", "rate-limits.json"));
+        factory.Cli.Email = OtherEmail;
+        (await SwitchAsync(client, OtherEmail)).StatusCode.ShouldBe(System.Net.HttpStatusCode.OK);
+
+        // The stash is gone, so these windows belong to whoever the tee names.
+        await WriteTeeAsync(factory, RateLimitGuardTeeFileReaderTests.Tee(OtherEmail));
+        JsonElement card = await LiveCardAsync(factory, client);
+
+        card.GetProperty("email").GetString().ShouldBe(OtherEmail);
+        card.GetProperty("quota").GetProperty("fiveHourPercent").GetDouble().ShouldBe(69);
+        card.GetProperty("quotaNote").ValueKind.ShouldBe(JsonValueKind.Null);
+    }
+
+    private static Task<HttpResponseMessage> SwitchAsync(HttpClient client, string email) =>
+        client.PostAsync(
+            new Uri("/api/accounts/" + Uri.EscapeDataString(email) + "/switch", UriKind.Relative),
+            content: null,
+            TestContext.Current.CancellationToken);
+
+    [Fact]
     public async Task AnAbsurdResetTimeInTheTeeBreaksNeitherEndpoint()
     {
         // The tee is written by other processes. A number outside DateTimeOffset's

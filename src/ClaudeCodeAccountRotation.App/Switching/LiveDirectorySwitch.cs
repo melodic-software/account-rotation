@@ -185,7 +185,13 @@ internal sealed partial class LiveDirectorySwitch
             ? await _pairs.ReadParkedAsync(targetProfile.FolderPath, cancellationToken)
             : null;
         ManagedLoginPolicy policy = await _policyReader.ReadAsync(cancellationToken);
-        bool journalOpen = await _journal.ReadOpenAsync(cancellationToken) is not null || QuarantineHoldsFiles();
+        // A credential temporary left in place is a refresh token no quarantine and
+        // no journal knows about, so neither of those guards sees it. Checked here
+        // rather than read from the startup report, because the crash that strands
+        // one can happen while the tool is running.
+        bool journalOpen = await _journal.ReadOpenAsync(cancellationToken) is not null
+            || QuarantineHoldsFiles()
+            || StrandedCredentialTemporary() is not null;
         AccountEmail? liveOwner = await ReadLiveOwnerAsync(live, cancellationToken);
         DateTimeOffset now = _timeProvider.GetUtcNow();
 
@@ -571,6 +577,15 @@ internal sealed partial class LiveDirectorySwitch
         LogReconciled("unresolved", entry.Incoming.Value);
         return ("the live pair matches neither side of the journaled switch to " + entry.Incoming.Value + "; resolve by hand under " + _options.AppDataDirectory, true);
     }
+
+    /// <summary>
+    /// The first credential-bearing temporary still sitting where a crashed write
+    /// left it, or null. The startup sweep moves these to quarantine; one that is
+    /// still here could not be moved, and it holds a refresh token that no
+    /// single-holder check matches, so no switch may run over it.
+    /// </summary>
+    private string? StrandedCredentialTemporary() =>
+        TemporaryFiles().FirstOrDefault(IsCredentialTemporary);
 
     private bool QuarantineHoldsFiles() =>
         Directory.Exists(_quarantineDirectory) && Directory.EnumerateFiles(_quarantineDirectory, "*", SearchOption.AllDirectories).Any();

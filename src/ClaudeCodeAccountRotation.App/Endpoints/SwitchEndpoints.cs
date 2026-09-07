@@ -36,9 +36,15 @@ internal static class SwitchEndpoints
             // account's name, and the dashboard must not read them as its own.
             StatuslineSnapshot? before = await tee.ReadAsync(cancellationToken);
             Result<SwitchOutcome, SwitchRefusal> outcome = await executor.SwitchToAsync(target.Value, cancellationToken);
-            if (outcome.IsSuccess && before is not null)
+            if (outcome.IsSuccess)
             {
-                state.PreSwitchWindows = new PreSwitchWindows(before.FiveHourResetsAt, before.SevenDayResetsAt);
+                // Assigned on every success, including when the tee could not be
+                // read: leaving an earlier switch's values in place would let them
+                // disown a later account's own snapshot whose reset times happened
+                // to match.
+                state.PreSwitchWindows = before is null
+                    ? null
+                    : new PreSwitchWindows(before.FiveHourResetsAt, before.SevenDayResetsAt);
             }
 
             return outcome.Match(

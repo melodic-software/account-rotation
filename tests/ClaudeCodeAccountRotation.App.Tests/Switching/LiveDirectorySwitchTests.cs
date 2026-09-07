@@ -195,6 +195,44 @@ public sealed class LiveDirectorySwitchTests : IDisposable
     }
 
     [Fact]
+    public async Task ASwitchRefusesWhileACredentialTemporaryIsStrandedInPlace()
+    {
+        // A temporary that could not be moved to quarantine holds a refresh token
+        // that neither the journal nor the quarantine knows about, so neither of
+        // the switch's other guards sees it.
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        await ParkedProfileAsync("b@example.com", "refresh-b");
+        _cli.Email = "b@example.com";
+        string stranded = Path.Combine(_liveDirectory, TemporaryName(CredentialFiles.FileName));
+        await File.WriteAllTextAsync(stranded, CredentialFiles.Shape("refresh-rotated").ToJsonString(), TestContext.Current.CancellationToken);
+
+        Result<SwitchOutcome, SwitchRefusal> blocked = await Switch().SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken);
+
+        blocked.Error.ShouldBe(SwitchRefusal.LiveIdentityUnverified);
+        (await CredentialFiles.FingerprintAsync(_liveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
+
+        // Cleared by hand, as the banner tells the operator to: the switch runs.
+        File.Delete(stranded);
+        (await Switch().SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken)).IsSuccess.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task ANonCredentialTemporaryDoesNotBlockASwitch()
+    {
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        await ParkedProfileAsync("b@example.com", "refresh-b");
+        _cli.Email = "b@example.com";
+        await File.WriteAllTextAsync(
+            Path.Combine(_liveDirectory, TemporaryName(".claude.json")),
+            """{"numStartups":3}""",
+            TestContext.Current.CancellationToken);
+
+        (await Switch().SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken)).IsSuccess.ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task StartupQuarantinesACredentialTemporaryThatIsTruncated()
     {
         // Power loss between the write and the flush leaves bytes that are not
