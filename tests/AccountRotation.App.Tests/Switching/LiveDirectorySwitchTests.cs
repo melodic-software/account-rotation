@@ -314,6 +314,48 @@ public sealed class LiveDirectorySwitchTests : IDisposable
         record["email"]!.GetValue<string>().ShouldBe("b@example.com");
     }
 
+    [Fact]
+    public async Task AStaleBlockASessionWroteBackIsRepatchedFromTheOwnersProfile()
+    {
+        // Seen on the real machine: minutes after a switch, a running session rewrote the state
+        // file from memory, naming the outgoing account with a block stamped before the switch.
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        await ParkedProfileAsync("b@example.com", "refresh-b");
+        _cli.Email = "b@example.com";
+        (await Switch().SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken)).IsSuccess.ShouldBeTrue();
+        await WriteStateFileAsync("a@example.com", startups: 8);
+
+        IdentityRepair outcome = await Switch().RepairStaleIdentityAsync(TestContext.Current.CancellationToken);
+
+        outcome.ShouldBe(IdentityRepair.Repatched);
+        (await StateFileEmailAsync()).ShouldBe("b@example.com");
+        JsonNode.Parse(await File.ReadAllTextAsync(_stateFilePath, TestContext.Current.CancellationToken))!["numStartups"]!.GetValue<int>().ShouldBe(8);
+        (await Switch().RepairStaleIdentityAsync(TestContext.Current.CancellationToken)).ShouldBe(IdentityRepair.NotNeeded);
+    }
+
+    [Fact]
+    public async Task ABlockTheCliStampedAfterTheSwitchIsALoginAndIsAdopted()
+    {
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        await ParkedProfileAsync("b@example.com", "refresh-b");
+        _cli.Email = "b@example.com";
+        (await Switch().SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken)).IsSuccess.ShouldBeTrue();
+        // The user logged in as c through the CLI: a new pair and a block fetched after the record.
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-c", TestContext.Current.CancellationToken);
+        JsonObject fresh = AccountJson("c@example.com");
+        fresh["profileFetchedAt"] = DateTimeOffset.UtcNow.AddMinutes(1).ToUnixTimeMilliseconds();
+        JsonObject state = new() { ["numStartups"] = 9, ["oauthAccount"] = fresh };
+        await File.WriteAllTextAsync(_stateFilePath, state.ToJsonString(), TestContext.Current.CancellationToken);
+
+        IdentityRepair outcome = await Switch().RepairStaleIdentityAsync(TestContext.Current.CancellationToken);
+
+        outcome.ShouldBe(IdentityRepair.NotNeeded);
+        (await StateFileEmailAsync()).ShouldBe("c@example.com");
+        File.Exists(Path.Combine(_appData, "state", "live-owner.json")).ShouldBeFalse("a login releases the record");
+    }
+
     [Theory]
     [InlineData("not json at all")]
     [InlineData("""{"fingerprint": 12, "email": ["x"], "at": 5}""")]

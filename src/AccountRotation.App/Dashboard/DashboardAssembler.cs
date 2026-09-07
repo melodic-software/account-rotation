@@ -1,4 +1,5 @@
 using AccountRotation.App.Adapters.FileSystem;
+using AccountRotation.App.Switching;
 using AccountRotation.Core.Identity;
 using AccountRotation.Core.Ports;
 
@@ -7,17 +8,21 @@ namespace AccountRotation.App.Dashboard;
 /// <summary>
 /// Builds the page's model from the live directory and the profile folders:
 /// one card per account, the live one first, plus the reconciliation banner.
+/// Every read first repairs a state file a session wrote a stale block back
+/// into, so the page never shows the outgoing account as live for long.
 /// Quota and ranking join in later phases.
 /// </summary>
 internal sealed class DashboardAssembler(
     ClaudeStateFile stateFile,
     ICredentialPairStore pairs,
     ProfileFolderStore profiles,
+    LiveDirectorySwitch executor,
     DashboardState state,
     TimeProvider timeProvider)
 {
     public async Task<DashboardView> AssembleAsync(CancellationToken cancellationToken)
     {
+        _ = await executor.RepairStaleIdentityAsync(cancellationToken);
         OAuthAccountBlock? liveAccount = await stateFile.ReadAccountBlockAsync(cancellationToken);
         CredentialPair? livePair = await pairs.ReadLiveAsync(cancellationToken);
         IReadOnlyList<ParkedProfile> parked = await profiles.ListAsync(cancellationToken);

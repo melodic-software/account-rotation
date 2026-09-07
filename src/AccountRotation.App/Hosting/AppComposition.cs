@@ -91,6 +91,7 @@ internal static class AppComposition
         services.AddSingleton<DashboardAssembler>();
         services.AddHostedService<InstanceLockHolder>();
         services.AddHostedService<StartupReconciliation>();
+        services.AddHostedService<StateFileWatcher>();
 
         // Loopback only: the page is a local control surface, never a network service.
         builder.WebHost.ConfigureKestrel(kestrel => kestrel.ListenLocalhost(configuration.ListenPort));

@@ -87,6 +87,59 @@ internal sealed partial class LiveDirectorySwitch
         }
     }
 
+    /// <summary>
+    /// Restores the state file's <c>oauthAccount</c> block when a running session has
+    /// written its in-memory block back over the switch's patch (observed on the
+    /// real machine within minutes of a switch). The owner record decides: a block
+    /// naming another account and stamped before the record was written is stale,
+    /// and the owner's block, kept in its profile folder since it was parked, is
+    /// patched in again; a block stamped after the record is a real login and is
+    /// adopted instead. Runs with a zero gate wait so it never delays a switch.
+    /// </summary>
+    public async Task<IdentityRepair> RepairStaleIdentityAsync(CancellationToken cancellationToken)
+    {
+        IDisposable? permit = null;
+        try
+        {
+            try
+            {
+                permit = await _gate.AcquireAsync(TimeSpan.Zero, cancellationToken);
+            }
+            catch (TimeoutException)
+            {
+                return IdentityRepair.Busy;
+            }
+
+            LiveAccountState live = await SnapshotLiveAsync(cancellationToken);
+            if (!live.HasCredentials)
+            {
+                return IdentityRepair.NotNeeded;
+            }
+
+            AccountEmail? owner = await ReadLiveOwnerAsync(live, cancellationToken);
+            if (owner is not AccountEmail recorded || live.Account?.Email == recorded)
+            {
+                return IdentityRepair.NotNeeded;
+            }
+
+            string folder = Path.Combine(_options.ProfilesRoot, ProfileFolderName.FromEmail(recorded));
+            OAuthAccountBlock? block = Directory.Exists(folder) ? await _profiles.ReadAccountAsync(folder, cancellationToken) : null;
+            if (block is null)
+            {
+                LogRepairImpossible(recorded.Value, folder);
+                return IdentityRepair.NoProfileBlock;
+            }
+
+            await _stateFile.PatchAccountBlockAsync(block, CancellationToken.None);
+            LogRepatched(recorded.Value, live.Account?.Email?.Value ?? "(none)");
+            return IdentityRepair.Repatched;
+        }
+        finally
+        {
+            permit?.Dispose();
+        }
+    }
+
     public async Task<ReconciliationReport> ReconcileAsync(CancellationToken cancellationToken)
     {
         using IDisposable permit = await _gate.AcquireAsync(_options.MutationGateTimeout, cancellationToken);
@@ -430,6 +483,12 @@ internal sealed partial class LiveDirectorySwitch
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "live owner record for {Owner} disagrees with the state file, which names {Named} from before the record; switching refuses until they agree")]
     private partial void LogOwnerStale(string owner, string named);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "state file re-patched to {Owner}: a session had written back its older block naming {Named}")]
+    private partial void LogRepatched(string owner, string named);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "state file is stale but {Owner} has no profile block under {Folder} to restore it from")]
+    private partial void LogRepairImpossible(string owner, string folder);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "switched {From} -> {To} (cli mismatch: {Mismatch})")]
     private partial void LogSwitched(string? from, string to, bool mismatch);
