@@ -10,6 +10,7 @@ public sealed record ClaudeCodeAccountRotationConfiguration(
     string StateFilePath,
     string ProfilesRoot,
     string AppDataDirectory,
+    string StatuslineTeePath,
     int ListenPort,
     TimeSpan RefreshLockWaitBound,
     string? ClaudeExecutable,

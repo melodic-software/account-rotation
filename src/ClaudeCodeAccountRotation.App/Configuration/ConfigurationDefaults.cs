@@ -12,6 +12,12 @@ internal static class ConfigurationDefaults
 {
     public const int DefaultListenPort = 48211;
     public const string ProductToken = "claude-code-account-rotation";
+
+    // The rate-limit-guard tee: written by live sessions inside the live config
+    // directory, so it follows CLAUDE_CONFIG_DIR the same way everything else does.
+    private const string TeeDirectoryName = "rate-limit-guard";
+    private const string TeeFileName = "rate-limits.json";
+
     public static readonly TimeSpan DefaultRefreshLockWaitBound = TimeSpan.FromSeconds(10);
 
     public static ClaudeCodeAccountRotationConfiguration ForCurrentUser()
@@ -34,6 +40,7 @@ internal static class ConfigurationDefaults
             stateFilePath,
             Path.Combine(homeDirectory, ".claude-profiles"),
             Path.Combine(localAppDataDirectory, ProductToken),
+            Path.Combine(liveConfigDirectory, TeeDirectoryName, TeeFileName),
             DefaultListenPort,
             DefaultRefreshLockWaitBound,
             ClaudeExecutable: null,

@@ -82,6 +82,7 @@ internal static class AppComposition
         services.AddSingleton<ICredentialPairStore>(new FileSystemCredentialPairStore(configuration.LiveConfigDirectory, configuration.ProfilesRoot, TimeProvider.System));
         services.AddSingleton(new ClaudeStateFile(configuration.StateFilePath));
         services.AddSingleton(new ProfileFolderStore(configuration.ProfilesRoot));
+        services.AddSingleton(new RateLimitGuardTeeFileReader(configuration.StatuslineTeePath));
         services.AddSingleton(new SwitchJournal(configuration.AppDataDirectory));
         services.AddSingleton<CredentialMutationGate>();
         services.AddSingleton(ManagedLoginPolicyReader.ForCurrentMachine());
