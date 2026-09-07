@@ -136,14 +136,70 @@ public sealed class RateLimitGuardTeeFileReaderTests : IDisposable
     [Fact]
     public async Task APathThatCannotBeOpenedIsAnAbsentSnapshot()
     {
-        string blocked = Path.Combine(_directory, "blocked");
-        Directory.CreateDirectory(blocked);
-        // Pinned, because it is the reason the catch names this type: opening a
-        // directory as a file is an UnauthorizedAccessException, not an IOException.
-        Should.Throw<UnauthorizedAccessException>(() => new FileStream(blocked, FileMode.Open, FileAccess.Read));
-        RateLimitGuardTeeFileReader reader = new(blocked);
+        // A real file that exists and cannot be opened. A directory would not do:
+        // File.Exists is false for one, so the old exists-then-open check would
+        // have short-circuited and this test would pass without the fix.
+        await WriteAsync(Tee("dev.a@example.com"));
+        DenyReading(_teePath);
+        try
+        {
+            File.Exists(_teePath).ShouldBeTrue();
+            // Pinned: this is the exception type the widened catch names.
+            Should.Throw<UnauthorizedAccessException>(() => new FileStream(_teePath, FileMode.Open, FileAccess.Read));
+            RateLimitGuardTeeFileReader reader = new(_teePath);
 
-        (await reader.ReadAsync(TestContext.Current.CancellationToken)).ShouldBeNull();
+            (await reader.ReadAsync(TestContext.Current.CancellationToken)).ShouldBeNull();
+        }
+        finally
+        {
+            // Before Dispose deletes the directory, or the cleanup fails too.
+            AllowReading(_teePath);
+        }
+    }
+
+    private static void DenyReading(string path)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            SetWindowsReadDeny(path, deny: true);
+        }
+        else
+        {
+            File.SetUnixFileMode(path, UnixFileMode.None);
+        }
+    }
+
+    private static void AllowReading(string path)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            SetWindowsReadDeny(path, deny: false);
+        }
+        else
+        {
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static void SetWindowsReadDeny(string path, bool deny)
+    {
+        FileInfo file = new(path);
+        System.Security.AccessControl.FileSecurity security = file.GetAccessControl();
+        System.Security.AccessControl.FileSystemAccessRule rule = new(
+            System.Security.Principal.WindowsIdentity.GetCurrent().User!,
+            System.Security.AccessControl.FileSystemRights.Read,
+            System.Security.AccessControl.AccessControlType.Deny);
+        if (deny)
+        {
+            security.AddAccessRule(rule);
+        }
+        else
+        {
+            security.RemoveAccessRuleAll(rule);
+        }
+
+        file.SetAccessControl(security);
     }
 
     /// <summary>The tee file as rate-limit-guard 0.8.0 writes it.</summary>

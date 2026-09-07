@@ -279,21 +279,9 @@ internal sealed partial class LiveDirectorySwitch
     {
         List<string> quarantined = [];
         List<string> stranded = [];
-        List<string> temporaries;
-        try
-        {
-            // Materialized inside the try: the enumeration is lazy, so a directory
-            // that refuses to be listed would otherwise throw from the foreach
-            // header, past every guard, and fail the host's start.
-            temporaries = [.. TemporaryFiles()];
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            LogSweepIncomplete(exception.Message);
-            return ([], []);
-        }
-
-        foreach (string path in temporaries)
+        // Each root is listed under its own guard inside TemporaryFiles, so one
+        // directory that refuses to be listed costs that directory and no other.
+        foreach (string path in TemporaryFiles())
         {
             cancellationToken.ThrowIfCancellationRequested();
             try
@@ -355,15 +343,10 @@ internal sealed partial class LiveDirectorySwitch
     /// </summary>
     private IEnumerable<string> TemporaryFiles()
     {
-        List<string> roots = [_options.LiveConfigDirectory];
-        if (Directory.Exists(_options.ProfilesRoot))
-        {
-            roots.AddRange(Directory.EnumerateDirectories(_options.ProfilesRoot));
-        }
-
+        List<string> roots = [_options.LiveConfigDirectory, .. ProfileFolders()];
         foreach (string root in roots.Where(Directory.Exists))
         {
-            foreach (string path in Directory.EnumerateFiles(root, ".*.tmp", SearchOption.TopDirectoryOnly).Where(IsOwnTemporary))
+            foreach (string path in ListTemporaries(root, SearchOption.TopDirectoryOnly))
             {
                 yield return path;
             }
@@ -374,11 +357,44 @@ internal sealed partial class LiveDirectorySwitch
             // App data holds the journal, the owner record, the snapshot cache, and
             // the recovery files, in nested directories, so this leg goes deep. The
             // quarantine itself is skipped: its contents are already at rest.
-            foreach (string path in Directory.EnumerateFiles(_options.AppDataDirectory, ".*.tmp", SearchOption.AllDirectories)
-                .Where(path => IsOwnTemporary(path) && !path.StartsWith(_quarantineDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)))
+            foreach (string path in ListTemporaries(_options.AppDataDirectory, SearchOption.AllDirectories)
+                .Where(path => !path.StartsWith(_quarantineDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)))
             {
                 yield return path;
             }
+        }
+    }
+
+    /// <summary>
+    /// One root's temporaries, materialized under its own guard. Listing is lazy,
+    /// so an unlistable directory would otherwise throw from a <c>foreach</c>
+    /// header far away. Per root rather than per sweep on purpose: a permission
+    /// on one profile folder must not silently cost the live directory its sweep
+    /// and let a switch proceed over a stranded credential temporary.
+    /// </summary>
+    private IReadOnlyList<string> ListTemporaries(string root, SearchOption option)
+    {
+        try
+        {
+            return [.. Directory.EnumerateFiles(root, ".*.tmp", option).Where(IsOwnTemporary)];
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            LogSweepIncomplete(root, exception.Message);
+            return [];
+        }
+    }
+
+    private IReadOnlyList<string> ProfileFolders()
+    {
+        try
+        {
+            return Directory.Exists(_options.ProfilesRoot) ? [.. Directory.EnumerateDirectories(_options.ProfilesRoot)] : [];
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            LogSweepIncomplete(_options.ProfilesRoot, exception.Message);
+            return [];
         }
     }
 
@@ -657,8 +673,8 @@ internal sealed partial class LiveDirectorySwitch
     [LoggerMessage(Level = LogLevel.Warning, Message = "a temporary file at {Source} holds a credential pair and could not be moved to quarantine; it stays where it is and switching is blocked")]
     private partial void LogStrandedTemporary(string source);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "the stale-temporary sweep could not list a directory and was skipped this start: {Detail}")]
-    private partial void LogSweepIncomplete(string detail);
+    [LoggerMessage(Level = LogLevel.Warning, Message = "the stale-temporary sweep could not list {Root}, so that directory was skipped this start: {Detail}")]
+    private partial void LogSweepIncomplete(string root, string detail);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "journal reconciliation {Outcome} for {Incoming}")]
     private partial void LogReconciled(string outcome, string incoming);

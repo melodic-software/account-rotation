@@ -215,13 +215,17 @@ public sealed class LiveDirectorySwitchTests : IDisposable
     }
 
     [Fact]
-    public async Task ADirectoryThatCannotBeListedDoesNotFailReconciliation()
+    public async Task ADirectoryThatCannotBeListedCostsOnlyItself()
     {
-        // The sweep enumerates lazily, so a directory that refuses to be listed
-        // used to throw from the foreach header, past every guard, and take the
-        // host's start with it.
+        // The sweep enumerates lazily, so an unlistable directory used to throw
+        // from the foreach header, past every guard, and take the host's start
+        // with it. Guarding the whole sweep instead would be worse than the crash:
+        // one unreadable profile folder would silently skip the live directory
+        // too, and a switch would proceed over a stranded credential temporary.
         await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
         await WriteStateFileAsync("a@example.com");
+        string stranded = Path.Combine(_liveDirectory, TemporaryName(CredentialFiles.FileName));
+        await File.WriteAllTextAsync(stranded, CredentialFiles.Shape("refresh-rotated").ToJsonString(), TestContext.Current.CancellationToken);
         string unlistable = Path.Combine(_profilesRoot, "b@example.com");
         Directory.CreateDirectory(unlistable);
         DenyListing(unlistable);
@@ -232,8 +236,11 @@ public sealed class LiveDirectorySwitchTests : IDisposable
 
             ReconciliationReport report = await Switch().ReconcileAsync(TestContext.Current.CancellationToken);
 
-            report.Quarantined.ShouldBeEmpty();
             report.JournalOutcome.ShouldBe("no open journal");
+            // The live directory was still swept despite the unreadable profile folder.
+            File.Exists(stranded).ShouldBeFalse();
+            report.Quarantined.ShouldHaveSingleItem().ShouldContain("-temp-live");
+            report.SwitchingBlocked.ShouldBeTrue();
         }
         finally
         {
