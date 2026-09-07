@@ -63,23 +63,33 @@ internal static class AnthropicEndpoints
         };
 
     /// <summary>
+    /// The longest wait a <c>Retry-After</c> can impose. Spike 02 measured the
+    /// real lockout at 300 seconds; the header is a value the tool does not
+    /// control, and one absurd number should not park an account for a year.
+    /// </summary>
+    public static readonly TimeSpan MaximumRetryAfter = TimeSpan.FromHours(1);
+
+    /// <summary>
     /// <c>Retry-After</c> as either a delay or an absolute date, both of which
-    /// the header allows; an absent or unreadable one leaves the wait unknown.
+    /// the header allows, clamped to <see cref="MaximumRetryAfter"/>; an absent
+    /// or unreadable one leaves the wait unknown.
     /// </summary>
     private static TimeSpan? RetryAfter(HttpResponseMessage response, TimeProvider timeProvider)
     {
         System.Net.Http.Headers.RetryConditionHeaderValue? header = response.Headers.RetryAfter;
         if (header?.Delta is TimeSpan delta)
         {
-            return delta;
+            return Clamp(delta);
         }
 
         if (header?.Date is DateTimeOffset date)
         {
-            TimeSpan wait = date - timeProvider.GetUtcNow();
-            return wait > TimeSpan.Zero ? wait : TimeSpan.Zero;
+            return Clamp(date - timeProvider.GetUtcNow());
         }
 
         return null;
     }
+
+    private static TimeSpan Clamp(TimeSpan wait) =>
+        wait < TimeSpan.Zero ? TimeSpan.Zero : wait > MaximumRetryAfter ? MaximumRetryAfter : wait;
 }

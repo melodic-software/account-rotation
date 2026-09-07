@@ -106,6 +106,34 @@ public sealed class ClaudeOAuthTokenRefreshClientTests
     }
 
     [Fact]
+    public async Task ARetryAfterDateAlreadyPastBecomesNoWaitAtAll()
+    {
+        using HttpResponseMessage limited = new(HttpStatusCode.TooManyRequests);
+        limited.Headers.Add("Retry-After", _now.AddSeconds(-120).ToString("R", System.Globalization.CultureInfo.InvariantCulture));
+        using RecordingHandler handler = new(limited);
+        using HttpClient http = new(handler);
+        ClaudeOAuthTokenRefreshClient client = new(http, UserAgent, new FixedClock(_now));
+
+        Result<RefreshedTokens, UsageReadFailure> refreshed = await client.RefreshAsync("refresh-old", TestContext.Current.CancellationToken);
+
+        refreshed.Error.RetryAfter.ShouldBe(TimeSpan.Zero);
+    }
+
+    [Fact]
+    public async Task ARetryAfterDateFarInTheFutureIsClampedToAnHour()
+    {
+        using HttpResponseMessage limited = new(HttpStatusCode.TooManyRequests);
+        limited.Headers.Add("Retry-After", _now.AddDays(30).ToString("R", System.Globalization.CultureInfo.InvariantCulture));
+        using RecordingHandler handler = new(limited);
+        using HttpClient http = new(handler);
+        ClaudeOAuthTokenRefreshClient client = new(http, UserAgent, new FixedClock(_now));
+
+        Result<RefreshedTokens, UsageReadFailure> refreshed = await client.RefreshAsync("refresh-old", TestContext.Current.CancellationToken);
+
+        refreshed.Error.RetryAfter.ShouldBe(TimeSpan.FromHours(1));
+    }
+
+    [Fact]
     public async Task ARefusedRefreshTokenIsUnauthorized()
     {
         using RecordingHandler handler = new(new HttpResponseMessage(HttpStatusCode.Unauthorized));

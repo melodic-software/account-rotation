@@ -72,6 +72,25 @@ public sealed class AnthropicUsageEndpointClientTests
         handler.Requests.Count.ShouldBe(1);
     }
 
+    [Theory]
+    // A header the tool does not control must not park an account for a year,
+    // nor a clock skew produce a negative wait.
+    [InlineData("999999", 3600)]
+    [InlineData("3601", 3600)]
+    [InlineData("300", 300)]
+    public async Task AnAbsurdRetryAfterIsClampedToAnHour(string retryAfter, int expectedSeconds)
+    {
+        using HttpResponseMessage limited = new(HttpStatusCode.TooManyRequests);
+        limited.Headers.Add("Retry-After", retryAfter);
+        using RecordingHandler handler = new(limited);
+        using HttpClient http = new(handler);
+        AnthropicUsageEndpointClient client = new(http, UserAgent, TimeProvider.System);
+
+        Result<JsonDocument, UsageReadFailure> read = await client.ReadUsageAsync("access-token", TestContext.Current.CancellationToken);
+
+        read.Error.RetryAfter.ShouldBe(TimeSpan.FromSeconds(expectedSeconds));
+    }
+
     [Fact]
     public async Task AnUnauthorizedResponseIsTypedSoAParkedPairCanBeRefreshed()
     {
