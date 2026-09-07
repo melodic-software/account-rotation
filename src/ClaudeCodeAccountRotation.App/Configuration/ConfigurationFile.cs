@@ -59,7 +59,19 @@ internal static class ConfigurationFile
         ["refreshLockWaitSeconds"] = configuration.RefreshLockWaitBound.TotalSeconds,
         ["claudeExecutable"] = configuration.ClaudeExecutable,
         ["userAgentProductToken"] = configuration.UserAgentProductToken,
+        ["browserExecutables"] = BrowserExecutablesToJson(configuration.BrowserExecutables),
     };
+
+    private static JsonObject BrowserExecutablesToJson(IReadOnlyDictionary<string, string> executables)
+    {
+        JsonObject json = [];
+        foreach ((string browser, string path) in executables)
+        {
+            json[browser] = path;
+        }
+
+        return json;
+    }
 
     private static ClaudeCodeAccountRotationConfiguration Merge(ClaudeCodeAccountRotationConfiguration defaults, JsonObject raw)
     {
@@ -76,7 +88,33 @@ internal static class ConfigurationFile
             Number(raw, "listenPort") is double port ? (int)port : defaults.ListenPort,
             Number(raw, "refreshLockWaitSeconds") is double seconds ? TimeSpan.FromSeconds(seconds) : defaults.RefreshLockWaitBound,
             Text(raw, "claudeExecutable") ?? defaults.ClaudeExecutable,
-            Text(raw, "userAgentProductToken") ?? defaults.UserAgentProductToken);
+            Text(raw, "userAgentProductToken") ?? defaults.UserAgentProductToken,
+            BrowserExecutables(raw) ?? defaults.BrowserExecutables);
+    }
+
+    /// <summary>
+    /// <c>browserExecutables</c>: a browser name (<c>chrome</c>, <c>edge</c>,
+    /// <c>brave</c>) to the full path of its executable. Matched
+    /// case-insensitively, so the operator's capitalization never decides
+    /// whether an override is found.
+    /// </summary>
+    private static Dictionary<string, string>? BrowserExecutables(JsonObject raw)
+    {
+        if (raw["browserExecutables"] is not JsonObject overrides)
+        {
+            return null;
+        }
+
+        Dictionary<string, string> executables = new(StringComparer.OrdinalIgnoreCase);
+        foreach ((string browser, JsonNode? path) in overrides)
+        {
+            if (path is JsonValue value && value.TryGetValue(out string? text) && !string.IsNullOrWhiteSpace(text))
+            {
+                executables[browser] = text;
+            }
+        }
+
+        return executables;
     }
 
     private static string? Text(JsonObject raw, string key) =>

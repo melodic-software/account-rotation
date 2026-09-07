@@ -6,14 +6,17 @@ using ClaudeCodeAccountRotation.Core.Ports;
 namespace ClaudeCodeAccountRotation.App.Adapters.Process;
 
 /// <summary>
-/// Runs <c>claude auth status --json</c> with an argument list (never a joined
-/// command line), optionally under <c>CLAUDE_CONFIG_DIR</c>, and kills the
-/// process at the timeout. A non-zero exit, a timeout, or unparsable output
-/// is a failure carrying the diagnostic text.
+/// Runs the unmodified CLI with an argument list (never a joined command line),
+/// optionally under <c>CLAUDE_CONFIG_DIR</c>, and kills the process at the
+/// timeout. A non-zero exit, a timeout, or unparsable output is a failure
+/// carrying the diagnostic text. Two commands run this way: <c>auth status
+/// --json</c>, the authority on which account a folder holds, and <c>auth
+/// logout</c>, which revokes a removed account's login.
 /// </summary>
-internal sealed class ClaudeCliProcessAuthStatus : IClaudeCliAuthStatus
+internal sealed class ClaudeCliProcessAuthStatus : IClaudeCliAuthStatus, IClaudeCliLogout
 {
     private static readonly string[] _statusArguments = ["auth", "status", "--json"];
+    private static readonly string[] _logoutArguments = ["auth", "logout"];
 
     private readonly ClaudeExecutable _executable;
     private readonly TimeSpan _timeout;
@@ -27,6 +30,20 @@ internal sealed class ClaudeCliProcessAuthStatus : IClaudeCliAuthStatus
 
     public async Task<Result<ClaudeAuthStatus, string>> ReadAsync(string? configDirectory, CancellationToken cancellationToken)
     {
+        Result<string, string> run = await RunAsync(_statusArguments, configDirectory, cancellationToken);
+        return run.IsFailure ? Result<ClaudeAuthStatus, string>.Failure(run.Error) : Parse(run.Value);
+    }
+
+    public async Task<Result<Unit, string>> LogoutAsync(string configDirectory, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(configDirectory);
+        Result<string, string> run = await RunAsync(_logoutArguments, configDirectory, cancellationToken);
+        return run.IsFailure ? Result<Unit, string>.Failure(run.Error) : Result<Unit, string>.Success(Unit.Value);
+    }
+
+    private async Task<Result<string, string>> RunAsync(string[] arguments, string? configDirectory, CancellationToken cancellationToken)
+    {
+        string command = "claude " + string.Join(' ', arguments);
         ProcessStartInfo startInfo = new(_executable.FileName)
         {
             UseShellExecute = false,
@@ -41,11 +58,11 @@ internal sealed class ClaudeCliProcessAuthStatus : IClaudeCliAuthStatus
             // shim path carrying "&" would be read as a command separator. With /s the
             // interpreter strips the outer quotes and runs the rest; the inner quotes keep
             // the path one operand. A Windows path can never contain a quote itself.
-            startInfo.Arguments = "/d /s /c \"\"" + shim + "\" " + string.Join(' ', _statusArguments) + "\"";
+            startInfo.Arguments = "/d /s /c \"\"" + shim + "\" " + string.Join(' ', arguments) + "\"";
         }
         else
         {
-            foreach (string argument in _executable.ArgumentPrefix.Concat(_statusArguments))
+            foreach (string argument in _executable.ArgumentPrefix.Concat(arguments))
             {
                 startInfo.ArgumentList.Add(argument);
             }
@@ -63,7 +80,7 @@ internal sealed class ClaudeCliProcessAuthStatus : IClaudeCliAuthStatus
         }
         catch (System.ComponentModel.Win32Exception exception)
         {
-            return Result<ClaudeAuthStatus, string>.Failure("could not start " + _executable.FileName + ": " + exception.Message);
+            return Result<string, string>.Failure("could not start " + _executable.FileName + ": " + exception.Message);
         }
 
         Task<string> standardOutput = process.StandardOutput.ReadToEndAsync(cancellationToken);
@@ -78,7 +95,7 @@ internal sealed class ClaudeCliProcessAuthStatus : IClaudeCliAuthStatus
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             TryKill(process);
-            return Result<ClaudeAuthStatus, string>.Failure("claude auth status timed out after " + _timeout.TotalSeconds.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture) + " s and was killed");
+            return Result<string, string>.Failure(command + " timed out after " + _timeout.TotalSeconds.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture) + " s and was killed");
         }
         catch (OperationCanceledException)
         {
@@ -88,13 +105,10 @@ internal sealed class ClaudeCliProcessAuthStatus : IClaudeCliAuthStatus
 
         string output = await standardOutput;
         string error = await standardError;
-        if (process.ExitCode != 0)
-        {
-            return Result<ClaudeAuthStatus, string>.Failure(
-                "claude auth status exited with code " + process.ExitCode.ToString(System.Globalization.CultureInfo.InvariantCulture) + ": " + (error + output).Trim());
-        }
-
-        return Parse(output);
+        return process.ExitCode == 0
+            ? Result<string, string>.Success(output)
+            : Result<string, string>.Failure(
+                command + " exited with code " + process.ExitCode.ToString(System.Globalization.CultureInfo.InvariantCulture) + ": " + (error + output).Trim());
     }
 
     private static Result<ClaudeAuthStatus, string> Parse(string output)

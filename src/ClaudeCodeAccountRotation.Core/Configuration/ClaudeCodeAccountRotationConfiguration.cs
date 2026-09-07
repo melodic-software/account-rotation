@@ -14,4 +14,5 @@ public sealed record ClaudeCodeAccountRotationConfiguration(
     int ListenPort,
     TimeSpan RefreshLockWaitBound,
     string? ClaudeExecutable,
-    string UserAgentProductToken);
+    string UserAgentProductToken,
+    IReadOnlyDictionary<string, string> BrowserExecutables);

@@ -84,12 +84,17 @@ internal static class AppComposition
         services.AddSingleton(new ClaudeStateFile(configuration.StateFilePath));
         services.AddSingleton(new ProfileFolderStore(configuration.ProfilesRoot));
         services.AddSingleton(new RateLimitGuardTeeFileReader(configuration.StatuslineTeePath));
+        // Through the factory so the container owns the gate this file disposes.
+        services.AddSingleton(_ => new RosterFile(configuration.AppDataDirectory));
+        services.AddSingleton<IBrowserLauncher>(new ChromiumFamilyBrowserLauncher(configuration.BrowserExecutables));
 
         AddOutboundClients(services, AnthropicEndpoints.UserAgent(configuration.UserAgentProductToken, Version));
         services.AddSingleton(new SwitchJournal(configuration.AppDataDirectory));
         services.AddSingleton<CredentialMutationGate>();
         services.AddSingleton(ManagedLoginPolicyReader.ForCurrentMachine());
-        services.AddSingleton(ResolveCli(configuration));
+        (IClaudeCliAuthStatus status, IClaudeCliLogout logout) = ResolveCli(configuration);
+        services.AddSingleton(status);
+        services.AddSingleton(logout);
         services.AddSingleton<LiveDirectorySwitch>();
         services.AddSingleton<DashboardState>();
         services.AddSingleton<DashboardAssembler>();
@@ -135,22 +140,31 @@ internal static class AppComposition
             .AddTypedClient<ITokenRefreshClient>(http => new ClaudeOAuthTokenRefreshClient(http, userAgent, TimeProvider.System));
     }
 
-    private static IClaudeCliAuthStatus ResolveCli(ClaudeCodeAccountRotationConfiguration configuration)
+    /// <summary>The one CLI process adapter, offered under both of the ports it serves.</summary>
+    private static (IClaudeCliAuthStatus Status, IClaudeCliLogout Logout) ResolveCli(ClaudeCodeAccountRotationConfiguration configuration)
     {
         Result<ClaudeExecutable, string> located = ClaudeExecutableLocator.Locate(
             configuration.ClaudeExecutable,
             Environment.GetEnvironmentVariable("PATH"),
             OperatingSystem.IsWindows(),
             Environment.SystemDirectory);
-        return located.IsSuccess
-            ? new ClaudeCliProcessAuthStatus(located.Value, _cliTimeout)
-            : new UnavailableClaudeCliAuthStatus(located.Error);
+        if (located.IsFailure)
+        {
+            UnavailableClaudeCli unavailable = new(located.Error);
+            return (unavailable, unavailable);
+        }
+
+        ClaudeCliProcessAuthStatus cli = new(located.Value, _cliTimeout);
+        return (cli, cli);
     }
 
-    /// <summary>Stands in when no CLI could be resolved: every read reports why.</summary>
-    private sealed class UnavailableClaudeCliAuthStatus(string reason) : IClaudeCliAuthStatus
+    /// <summary>Stands in when no CLI could be resolved: every call reports why.</summary>
+    private sealed class UnavailableClaudeCli(string reason) : IClaudeCliAuthStatus, IClaudeCliLogout
     {
         public Task<Result<ClaudeAuthStatus, string>> ReadAsync(string? configDirectory, CancellationToken cancellationToken) =>
             Task.FromResult(Result<ClaudeAuthStatus, string>.Failure(reason));
+
+        public Task<Result<Unit, string>> LogoutAsync(string configDirectory, CancellationToken cancellationToken) =>
+            Task.FromResult(Result<Unit, string>.Failure(reason));
     }
 }
