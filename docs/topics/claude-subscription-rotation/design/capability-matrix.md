@@ -1,4 +1,4 @@
-# Capability matrix: account-rotation
+# Capability matrix: claude-code-account-rotation
 
 Light-form design (Phase 1 of `/planning:design`), 2026-09-04. Inputs: the confirmed Brief in
 `../PLAN.md`, spikes 01 to 04 (memory slice), the research root index, and the org standards

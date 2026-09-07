@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>ClaudeCodeAccountRotation.App.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/ClaudeCodeAccountRotation.App/ClaudeCodeAccountRotation.App.csproj" />
+    <ProjectReference Include="../../src/ClaudeCodeAccountRotation.Core/ClaudeCodeAccountRotation.Core.csproj" />
+  </ItemGroup>
+
+</Project>

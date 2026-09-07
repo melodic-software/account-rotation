@@ -6,7 +6,7 @@ Interview complete 2026-09-03 (three rounds, Q1 to Q28). Brief confirmed by the 
 
 ### TLDR
 
-`account-rotation`: a single-executable local app with a web page that shows every one of the developer's Claude Max accounts with 5-hour and 7-day headroom, ranks them by earliest weekly reset, and switches the whole machine to the chosen account the way `/login` does today, without a browser step. Accounts are parked credential pairs; the live config dir stays `~/.claude`, so transcripts, settings, plugins, dotfiles, and every open session are untouched. Quota comes from live statusline snapshots plus an on-demand refresh that renews expired tokens itself. Nothing calls the model API outside the unmodified `claude` binary.
+`claude-code-account-rotation`: a single-executable local app with a web page that shows every one of the developer's Claude Max accounts with 5-hour and 7-day headroom, ranks them by earliest weekly reset, and switches the whole machine to the chosen account the way `/login` does today, without a browser step. Accounts are parked credential pairs; the live config dir stays `~/.claude`, so transcripts, settings, plugins, dotfiles, and every open session are untouched. Quota comes from live statusline snapshots plus an on-demand refresh that renews expired tokens itself. Nothing calls the model API outside the unmodified `claude` binary.
 
 ### Goal
 
@@ -25,7 +25,7 @@ Uninterrupted Claude Code work across ten personally owned Max 20x subscriptions
 - **Machines** (Q6, Q23). Laptop and desktop in scope. The app must also install and run on the work machine, which has no D drive; whether personal accounts may be switched there is gated by that machine's `/status` setting sources (a device-managed `forceLoginOrgUUID` blocks it) and by the user's choice; the Enterprise seat is never in the rotation. Machines are independent: each logs in its own pairs; refresh gives server truth anywhere; no snapshot sync.
 - **Remote Control** (Q13) is off; web and cloud sessions stay per account.
 - **Stack** (Q22): .NET single-file executable serving a static page plus JSON endpoints, launched from PATH or a shortcut.
-- **Home** (Q15, Q21): `melodic-software/account-rotation` (chosen 2026-09-04 via /naming:name-it-better; README tagline carries "for Claude Code"), public, MIT, provisioned through `melodic-software/github-iac`. The `rate-limit-guard` tee gains an `account` field from `claude auth status --json`, closing claude-code-plugins #1218, as a separate PR.
+- **Home** (Q15, Q21): `melodic-software/claude-code-account-rotation` (named `account-rotation` on 2026-09-04 via /naming:name-it-better; renamed 2026-09-07 through #5 so the name says which product it rotates; README tagline carries "for Claude Code"), public, MIT, provisioned through `melodic-software/github-iac`. The `rate-limit-guard` tee gains an `account` field from `claude auth status --json`, closing claude-code-plugins #1218, as a separate PR.
 
 ### Acceptance criteria
 
@@ -75,7 +75,7 @@ written. Phase tags advance `[TODO]` → `[DOING]` → `[DONE]` during implement
 
 ### Goal
 
-**What:** build `account-rotation`, a .NET 10 single-file executable serving a loopback web page that
+**What:** build `claude-code-account-rotation`, a .NET 10 single-file executable serving a loopback web page that
 shows every parked Claude Max account's quota, ranks them by earliest weekly reset, and switches the
 whole machine to a chosen account by moving credential pairs (model D), plus a one-line writer change
 in `rate-limit-guard` so statusline snapshots name their account.
@@ -121,7 +121,7 @@ spike inside Phase 4, not by a phase of its own.
 
 Review: architecture
 
-Creates `melodic-software/account-rotation` and a solution that builds green under the org's strict
+Creates `melodic-software/claude-code-account-rotation` and a solution that builds green under the org's strict
 analyzer posture, with one real behavior under test so the test lane is proven before Phase 1.
 
 **Human-run steps** (the user's own deploys; the implementer prepares the diffs and stops):
@@ -132,25 +132,25 @@ analyzer posture, with one real behavior under test so the test lane is proven b
   written below, because the synced `components/claude-lanes/` callers name the private fleet's
   runner label and runner-policy refuses them on a public repository; hosted callers arrive by
   repo-local PR and both flags flip in the same change as `RequiresCi`, Phase 5.5.) In `melodic-software/github-iac`, add a `GovernedRepositorySpec` entry
-  `new("account-rotation", a => { a.Description = "Machine-wide Claude Max account switching and quota dashboard for Claude Code: parked credential pairs, one live config dir, no browser step."; a.Visibility = "public"; a.Topics = new[] { "claude-code", "dotnet", "csharp", "windows", "developer-tools" }; a.AutoInit = true; a.SecurityAndAnalysis = SecretScanning("enabled"); }, RequiresCi: false, RequiresSecurityReview: true, UsesClaudeReview: true, VulnerabilityAlerts: true, DependabotSecurityUpdates: true)`.
+  `new("claude-code-account-rotation", a => { a.Description = "Machine-wide Claude Max account switching and quota dashboard for Claude Code: parked credential pairs, one live config dir, no browser step."; a.Visibility = "public"; a.Topics = new[] { "claude-code", "dotnet", "csharp", "windows", "developer-tools" }; a.AutoInit = true; a.SecurityAndAnalysis = SecretScanning("enabled"); }, RequiresCi: false, RequiresSecurityReview: true, UsesClaudeReview: true, VulnerabilityAlerts: true, DependabotSecurityUpdates: true)`.
   `RequiresCi` stays false until `main` emits the org's `ci-status` context (Phase 5); github-iac#409
   folded the four ci-gate callers into that single context after this item was written.
   Open the PR; the user runs `pulumi preview` and `pulumi up`.
 - [x] **0.2** (standards#528 merged 2026-09-05 as `fdac203` after the App grant; the first sync PR,
-  account-rotation#1, merged the same day as `89afad3` and now owns `eng/dotnet-analysis/`. Deviations
+  claude-code-account-rotation#1, merged the same day as `89afad3` and now owns `eng/dotnet-analysis/`. Deviations
   recorded: the two `claude-*-caller` components are **excluded** (private-only, see 0.1);
   `managed-files-guard-caller` and `typos` are **included** (every public hosted-only target carries
   both); `automerge: false` until `requires-ci` flips, since an armed sync PR would merge ungated.
   Local bootstrap: the checkout was `git init`-ed at the canonical path before the remote existed;
-  0.3's clone becomes a `git remote add` plus a rebase onto the AutoInit commit.) In `melodic-software/standards`, add `melodic-software/account-rotation` to
+  0.3's clone becomes a `git remote add` plus a rebase onto the AutoInit commit.) In `melodic-software/standards`, add `melodic-software/claude-code-account-rotation` to
   `distribution/sync-manifest.yml` `targets` with the managed set github-iac uses minus
   `claude-settings-github-iac` and `runner-policy` (public repo, hosted CI only):
   `claude-review-caller, claude-security-review-caller, cloud-bootstrap, dotnet-analysis, editorconfig-checker, gitleaks, lefthook-base, lefthook-dotnet, lychee, markdownlint, node-runtime, pr-body-contract-rule, repository-text, review-instructions, shellcheck`.
   The user grants the repository in the `melodic-standards-sync` App installation UI **before** the
   manifest merge (github-iac README "Add an existing organization repository" order), then merges.
 - [x] **0.3** (2026-09-05: `git remote add` plus a rebase onto the AutoInit commit `afb674d`, which
-  carried only a two-line README; the skeleton landed as account-rotation#2, squash `5a2a657`, after
-  one Codex finding on the path gate was fixed in the same PR.) Clone the new repo beside the other org checkouts (`<local-repos>/melodic-software/account-rotation`)
+  carried only a two-line README; the skeleton landed as claude-code-account-rotation#2, squash `5a2a657`, after
+  one Codex finding on the path gate was fixed in the same PR.) Clone the new repo beside the other org checkouts (`<local-repos>/melodic-software/claude-code-account-rotation`)
   and move the contract slice in: copy `<spike-dir>/docs/topics/claude-subscription-rotation/` to
   `docs/topics/claude-subscription-rotation/`, and move `<spike-dir>/.work/` to `<repo>/.work/` (its
   self-ignoring `.gitignore` travels with it; nothing under `.work/` is staged). Before the first
@@ -162,14 +162,14 @@ analyzer posture, with one real behavior under test so the test lane is proven b
 - [x] **0.4** (2026-09-05; `Microsoft.Extensions.Http` is not pinned: the framework reference already
   carries the HTTP factory; a repository `.globalconfig` relaxes CA2007 for the Kestrel host; the App
   test project carries a `GET /healthz` round trip because the platform fails a zero-test project.)
-  Solution skeleton per `design/library-topology.md`: `AccountRotation.slnx`,
+  Solution skeleton per `design/library-topology.md`: `ClaudeCodeAccountRotation.slnx`,
   `global.json` (SDK `10.0.400`, `rollForward: disable`, `test.runner: Microsoft.Testing.Platform`),
   `Directory.Build.props` importing `eng/dotnet-analysis/Directory.Build.props` with
   `TargetFramework net10.0`, `Directory.Packages.props` pinning `Microsoft.Extensions.Http`,
   `xunit.v3.mtp-v2`, `Shouldly`, `NSubstitute`, `Microsoft.AspNetCore.Mvc.Testing` at medley's
-  current versions, four projects (`src/AccountRotation.Core`, `src/AccountRotation.App` with
+  current versions, four projects (`src/ClaudeCodeAccountRotation.Core`, `src/ClaudeCodeAccountRotation.App` with
   `<OutputType>Exe</OutputType>` and a framework reference to `Microsoft.AspNetCore.App`,
-  `tests/AccountRotation.Core.Tests`, `tests/AccountRotation.App.Tests`), `LICENSE` (MIT),
+  `tests/ClaudeCodeAccountRotation.Core.Tests`, `tests/ClaudeCodeAccountRotation.App.Tests`), `LICENSE` (MIT),
   `README.md` (tagline "Account switching and quota dashboard for Claude Code"), `CHANGELOG.md`.
   Until the standards sync PR lands, vendor `eng/dotnet-analysis/` byte-identical from the standards
   checkout so the build posture is strict from the first commit; the sync then owns the files.
@@ -190,29 +190,29 @@ analyzer posture, with one real behavior under test so the test lane is proven b
 |---|---|---|
 | [x] `github-iac/GovernedRepositories.cs` | MODIFY | new governed repo entry (0.1) |
 | [x] `standards/distribution/sync-manifest.yml` | MODIFY | new sync target (0.2) |
-| [x] `AccountRotation.slnx` | CREATE | solution |
+| [x] `ClaudeCodeAccountRotation.slnx` | CREATE | solution |
 | [x] `global.json` | CREATE | SDK pin, MTP runner |
 | [x] `Directory.Build.props` | CREATE | imports analysis overlay, TFM |
 | [x] `Directory.Packages.props` | CREATE | central versions |
 | [x] `eng/dotnet-analysis/Directory.Build.props`, `eng/dotnet-analysis/dotnet.globalconfig` | CREATE (vendored, then sync-owned) | strict posture |
 | [x] `eng/check-no-machine-paths.sh` | CREATE | AC 8 grep gate |
-| [x] `src/AccountRotation.Core/AccountRotation.Core.csproj` | CREATE | BCL-only project |
-| [x] `src/AccountRotation.Core/Identity/ProfileFolderName.cs` | CREATE | sanitizer (0.5) |
-| [x] `src/AccountRotation.App/AccountRotation.App.csproj`, `Program.cs` | CREATE | exe stub that starts Kestrel on loopback and serves `GET /healthz` |
-| [x] `tests/AccountRotation.Core.Tests/*.csproj`, `Identity/ProfileFolderNameTests.cs` | CREATE | first tests |
-| [x] `tests/AccountRotation.App.Tests/*.csproj` | CREATE | empty project compiles (carries the healthz test, see 0.4) |
+| [x] `src/ClaudeCodeAccountRotation.Core/ClaudeCodeAccountRotation.Core.csproj` | CREATE | BCL-only project |
+| [x] `src/ClaudeCodeAccountRotation.Core/Identity/ProfileFolderName.cs` | CREATE | sanitizer (0.5) |
+| [x] `src/ClaudeCodeAccountRotation.App/ClaudeCodeAccountRotation.App.csproj`, `Program.cs` | CREATE | exe stub that starts Kestrel on loopback and serves `GET /healthz` |
+| [x] `tests/ClaudeCodeAccountRotation.Core.Tests/*.csproj`, `Identity/ProfileFolderNameTests.cs` | CREATE | first tests |
+| [x] `tests/ClaudeCodeAccountRotation.App.Tests/*.csproj` | CREATE | empty project compiles (carries the healthz test, see 0.4) |
 | [x] `.github/workflows/ci.yml` | CREATE | build, test, path gate |
 | [x] `LICENSE`, `README.md`, `CHANGELOG.md`, `.gitignore` | CREATE | repo hygiene |
 | [x] `docs/topics/claude-subscription-rotation/**` | MOVE | contract slice from the spike dir |
 
 **Sanity Check:**
 
-- `gh repo view melodic-software/account-rotation --json visibility,licenseInfo -q '.visibility + " " + .licenseInfo.key'` prints `PUBLIC mit`.
+- `gh repo view melodic-software/claude-code-account-rotation --json visibility,licenseInfo -q '.visibility + " " + .licenseInfo.key'` prints `PUBLIC mit`.
 - In the checkout: `dotnet build -c Release` exit 0; `dotnet test` exit 0 and reports ≥ 6 passed tests (the sanitizer cases).
 - `test -f eng/dotnet-analysis/dotnet.globalconfig && grep -q "TreatWarningsAsErrors>true" eng/dotnet-analysis/Directory.Build.props` exit 0.
 - `bash eng/check-no-machine-paths.sh` exit 0.
 - `git -C <repo> status --porcelain | grep -c "^?? .work"` prints `0` (memory tier never staged).
-- `gh pr list -R melodic-software/account-rotation --state merged --search "chore: sync standards"` shows ≥ 1 merged sync PR (may land after 0.4; not a blocker for Phase 1).
+- `gh pr list -R melodic-software/claude-code-account-rotation --state merged --search "chore: sync standards"` shows ≥ 1 merged sync PR (may land after 0.4; not a blocker for Phase 1).
 - Run 2026-09-05 after #1 and #2 merged: all six pass (`PUBLIC mit`; 9 tests on the skeleton and 115
   on the Phase 1 branch; `eng/dotnet-analysis/` blobs on `main` identical to the sync's; `.work`
   never staged; one merged sync PR).
@@ -222,7 +222,7 @@ analyzer posture, with one real behavior under test so the test lane is proven b
 Review: security
 Review: concurrency
 
-Closed 2026-09-06 as account-rotation#3: the 1.5a probe and the live acceptance ran on the desktop
+Closed 2026-09-06 as claude-code-account-rotation#3: the 1.5a probe and the live acceptance ran on the desktop
 with three sessions open (log in `tests/acceptance/README.md`); the security and concurrency
 reviews' Critical and Important findings are fixed in the same PR, the Suggestions are filed as
 issues #7 to #12, and a fresh-context verifier confirmed nineteen criteria at the merge head. The
@@ -354,10 +354,10 @@ Behavioral reference: `spike-04-swap.py` (memory slice), guard for guard.
 - [x] **1.6** (2026-09-05; unknown command-line arguments pass through to the host rather than
   failing, because `WebApplication.CreateBuilder` reads `--key value` pairs and the test host passes
   its runner's own arguments to the entry point; the shipped template is the first-run file itself,
-  written with the defaults resolved.) Configuration: `AccountRotationConfiguration`, `ConfigurationDefaults.ForCurrentUser()`
+  written with the defaults resolved.) Configuration: `ClaudeCodeAccountRotationConfiguration`, `ConfigurationDefaults.ForCurrentUser()`
   (live dir from `CLAUDE_CONFIG_DIR` else `~/.claude`; state file `~/.claude.json` when unset,
   `<dir>/.claude.json` when set; profiles root `~/.claude-profiles`; app data
-  `%LOCALAPPDATA%\account-rotation` or XDG), `ConfigurationFile` (load; first run writes
+  `%LOCALAPPDATA%\claude-code-account-rotation` or XDG), `ConfigurationFile` (load; first run writes
   `config.template.json` content with defaults resolved at runtime), `--config`, `--port`, `--version`.
 - [x] **1.7** (2026-09-05; plus a loopback-Host middleware on every route; the bundled CA2025
   analyzer crashes on the minimal-API lambdas and is off in `.globalconfig`.) Endpoints `GET /api/dashboard` (identity only in this phase: live account, parked
@@ -374,29 +374,29 @@ Behavioral reference: `spike-04-swap.py` (memory slice), guard for guard.
 
 | File | Action | Rationale |
 |---|---|---|
-| [x] `src/AccountRotation.Core/Result.cs` | CREATE | result type |
-| [x] `src/AccountRotation.Core/Identity/{AccountEmail,OAuthAccountBlock,CredentialPair,RefreshTokenFingerprint,ParkedProfile,LiveAccountState}.cs` | CREATE | 1.1 |
-| [x] `src/AccountRotation.Core/Switching/{SwitchPlanner,SwitchPlan,SwitchRefusal,SwitchOutcome}.cs` (plus `SwitchPlanningInput`, `ManagedLoginPolicy`) | CREATE | 1.2 |
-| [x] `src/AccountRotation.Core/Ports/{ICredentialPairStore,IClaudeCliAuthStatus}.cs` | CREATE | 1.3 |
-| [x] `src/AccountRotation.Core/Configuration/AccountRotationConfiguration.cs` | CREATE | 1.6 |
-| [x] `src/AccountRotation.App/Adapters/FileSystem/{AtomicJsonFile,ClaudeStateFile,ProfileFolderStore,FileSystemCredentialPairStore}.cs` (plus `AtomicBytesFile`) | CREATE | 1.4 |
-| [x] `src/AccountRotation.App/Adapters/Process/ClaudeCliProcessAuthStatus.cs` | CREATE | 1.4 |
-| [x] `src/AccountRotation.App/Adapters/FileSystem/OAuthRefreshLock.cs` (P/Invoke exclusive mkdir, stale steal at 60 s) | CREATE | 1.5 |
-| [x] `src/AccountRotation.App/Switching/{LiveDirectorySwitch,SwitchJournal,CredentialMutationGate}.cs` (plus `SwitchOptions`) | CREATE | 1.5b |
-| [x] `src/AccountRotation.App/{Switching/InstanceLock,ManagedLoginPolicyReader}.cs`, `Adapters/Process/ClaudeExecutableLocator.cs` | CREATE | 1.3, 1.4, 1.5 |
-| [x] `src/AccountRotation.Core/Identity/AccountEmail.cs` (Parse rules), `Switching/SwitchRefusal.cs` (ten cases) | MODIFY | 1.2 |
-| [x] `src/AccountRotation.App/Configuration/{ConfigurationDefaults,ConfigurationFile,ConfigurationValidator,StartupArguments}.cs` (the first-run file is the template) | CREATE | 1.6 |
-| [x] `src/AccountRotation.App/Endpoints/{DashboardEndpoints,SwitchEndpoints}.cs`, `Dashboard/{DashboardAssembler,DashboardViews}.cs`, `Security/{SameOriginMutationFilter,LoopbackHostMiddleware}.cs`, `Hosting/{AppComposition,StartupReconciliation,InstanceLockHolder,EmbeddedPage}.cs` | CREATE | 1.7 |
-| [x] `src/AccountRotation.App/Program.cs` | MODIFY | composition root, explicit service types |
-| [x] `src/AccountRotation.App/wwwroot/{index.html,app.js,app.css}` | CREATE | 1.8 |
-| [x] `tests/AccountRotation.Core.Tests/Switching/SwitchPlannerTests.cs`, `Identity/*Tests.cs` | CREATE | output-based tests |
-| [x] `tests/AccountRotation.App.Tests/Adapters/{AtomicJsonFileTests,ClaudeStateFileTests,FileSystemCredentialPairStoreTests,ProfileFolderStoreTests,OAuthRefreshLockTests,ClaudeExecutableLocatorTests,ClaudeCliProcessAuthStatusTests}.cs`, `Switching/{LiveDirectorySwitchTests,CoordinationTests}.cs`, `Configuration/ConfigurationTests.cs`, `ManagedLoginPolicyReaderTests.cs` | CREATE | state-based over temp dirs |
-| [x] `tests/AccountRotation.App.Tests/Endpoints/SwitchEndpointTests.cs` (with `AppFactory`) | CREATE | `WebApplicationFactory`, doubles for the two ports |
+| [x] `src/ClaudeCodeAccountRotation.Core/Result.cs` | CREATE | result type |
+| [x] `src/ClaudeCodeAccountRotation.Core/Identity/{AccountEmail,OAuthAccountBlock,CredentialPair,RefreshTokenFingerprint,ParkedProfile,LiveAccountState}.cs` | CREATE | 1.1 |
+| [x] `src/ClaudeCodeAccountRotation.Core/Switching/{SwitchPlanner,SwitchPlan,SwitchRefusal,SwitchOutcome}.cs` (plus `SwitchPlanningInput`, `ManagedLoginPolicy`) | CREATE | 1.2 |
+| [x] `src/ClaudeCodeAccountRotation.Core/Ports/{ICredentialPairStore,IClaudeCliAuthStatus}.cs` | CREATE | 1.3 |
+| [x] `src/ClaudeCodeAccountRotation.Core/Configuration/ClaudeCodeAccountRotationConfiguration.cs` | CREATE | 1.6 |
+| [x] `src/ClaudeCodeAccountRotation.App/Adapters/FileSystem/{AtomicJsonFile,ClaudeStateFile,ProfileFolderStore,FileSystemCredentialPairStore}.cs` (plus `AtomicBytesFile`) | CREATE | 1.4 |
+| [x] `src/ClaudeCodeAccountRotation.App/Adapters/Process/ClaudeCliProcessAuthStatus.cs` | CREATE | 1.4 |
+| [x] `src/ClaudeCodeAccountRotation.App/Adapters/FileSystem/OAuthRefreshLock.cs` (P/Invoke exclusive mkdir, stale steal at 60 s) | CREATE | 1.5 |
+| [x] `src/ClaudeCodeAccountRotation.App/Switching/{LiveDirectorySwitch,SwitchJournal,CredentialMutationGate}.cs` (plus `SwitchOptions`) | CREATE | 1.5b |
+| [x] `src/ClaudeCodeAccountRotation.App/{Switching/InstanceLock,ManagedLoginPolicyReader}.cs`, `Adapters/Process/ClaudeExecutableLocator.cs` | CREATE | 1.3, 1.4, 1.5 |
+| [x] `src/ClaudeCodeAccountRotation.Core/Identity/AccountEmail.cs` (Parse rules), `Switching/SwitchRefusal.cs` (ten cases) | MODIFY | 1.2 |
+| [x] `src/ClaudeCodeAccountRotation.App/Configuration/{ConfigurationDefaults,ConfigurationFile,ConfigurationValidator,StartupArguments}.cs` (the first-run file is the template) | CREATE | 1.6 |
+| [x] `src/ClaudeCodeAccountRotation.App/Endpoints/{DashboardEndpoints,SwitchEndpoints}.cs`, `Dashboard/{DashboardAssembler,DashboardViews}.cs`, `Security/{SameOriginMutationFilter,LoopbackHostMiddleware}.cs`, `Hosting/{AppComposition,StartupReconciliation,InstanceLockHolder,EmbeddedPage}.cs` | CREATE | 1.7 |
+| [x] `src/ClaudeCodeAccountRotation.App/Program.cs` | MODIFY | composition root, explicit service types |
+| [x] `src/ClaudeCodeAccountRotation.App/wwwroot/{index.html,app.js,app.css}` | CREATE | 1.8 |
+| [x] `tests/ClaudeCodeAccountRotation.Core.Tests/Switching/SwitchPlannerTests.cs`, `Identity/*Tests.cs` | CREATE | output-based tests |
+| [x] `tests/ClaudeCodeAccountRotation.App.Tests/Adapters/{AtomicJsonFileTests,ClaudeStateFileTests,FileSystemCredentialPairStoreTests,ProfileFolderStoreTests,OAuthRefreshLockTests,ClaudeExecutableLocatorTests,ClaudeCliProcessAuthStatusTests}.cs`, `Switching/{LiveDirectorySwitchTests,CoordinationTests}.cs`, `Configuration/ConfigurationTests.cs`, `ManagedLoginPolicyReaderTests.cs` | CREATE | state-based over temp dirs |
+| [x] `tests/ClaudeCodeAccountRotation.App.Tests/Endpoints/SwitchEndpointTests.cs` (with `AppFactory`) | CREATE | `WebApplicationFactory`, doubles for the two ports |
 | [x] `tests/acceptance/check-single-holder.sh` (takes `<profiles-root> <live-dir>` as arguments), `tests/acceptance/check-live-identity.sh`, `tests/acceptance/README.md` | CREATE | 1.9 |
 
 **Sanity Check:**
 
-- `dotnet test` exit 0; `grep -c "SwitchRefusal\." tests/AccountRotation.Core.Tests/Switching/SwitchPlannerTests.cs` ≥ 9; `AccountEmailTests` has one test per Parse rule (≥ 6).
+- `dotnet test` exit 0; `grep -c "SwitchRefusal\." tests/ClaudeCodeAccountRotation.Core.Tests/Switching/SwitchPlannerTests.cs` ≥ 9; `AccountEmailTests` has one test per Parse rule (≥ 6).
 - `FileSystemCredentialPairStoreTests.TenSwitchesLeaveEachRefreshTokenInExactlyOneFile` passes (asserts `distinct == files` and no duplicate fingerprints after 10 alternating switches across 3 temp profiles).
 - `ClaudeStateFileTests.PatchChangesOnlyTheAccountSpan` passes (fixture is a ≥ 90 KB state file with hundreds of project entries and non-ASCII strings; every byte outside the `oauthAccount` value span is identical before and after; no `*.tmp` remains) and `PatchSurvivesAnExternalRewriteBetweenReadAndReplace` passes (a simulated CLI rewrite of an unrelated key between the tool's read and replace is not lost: the tool re-reads under the lock and re-applies). Both are moot if 1.5a drops the patch; record which.
 - `OAuthRefreshLockTests`: acquire creates `<live>/.oauth_refresh.lock` as a directory and removes it on dispose; a fresh directory held by a simulated CLI (mtime now) makes the switch wait then return `RefreshLockPresent` after the bound; a directory with mtime 61 s ago is stolen; two tool-side acquisitions serialize.
@@ -404,7 +404,7 @@ Behavioral reference: `spike-04-swap.py` (memory slice), guard for guard.
 - `LiveDirectorySwitchTests.CrashBetweenUnparkAndPatchIsReconciledAtStartup`: a journal left at step `unparked` with the state file still naming the outgoing account is reconciled (state file patched to the incoming account, journal cleared); a plan requested before reconciliation returns `LiveIdentityUnverified`.
 - `LiveDirectorySwitchTests.ConcurrentSwitchAndRefreshSerialize`: a switch and a parked-pair refresh started together complete one after the other with `duplicates=0` on the fingerprints.
 - `ConfigurationFileTests`: profiles root on another volume → refused naming both paths; profiles root inside the live dir → refused; a second instance against the same app data → refused with the running URL.
-- `SwitchEndpointTests`: `POST /api/accounts/{email}/switch` without `X-Account-Rotation` → 403; with a cross-site `Origin` → 403; with a non-loopback `Host` → 400; with a fresh `.oauth_refresh.lock` directory in the temp live dir → 409 `RefreshLockPresent`; with a parked pair whose login expired → 409 `TargetLoginExpired`; two concurrent switch requests → one 200 and one 409.
+- `SwitchEndpointTests`: `POST /api/accounts/{email}/switch` without `X-Claude-Code-Account-Rotation` → 403; with a cross-site `Origin` → 403; with a non-loopback `Host` → 400; with a fresh `.oauth_refresh.lock` directory in the temp live dir → 409 `RefreshLockPresent`; with a parked pair whose login expired → 409 `TargetLoginExpired`; two concurrent switch requests → one 200 and one 409.
 - Live acceptance on this desktop (human observes, recorded in `tests/acceptance/README.md` log): with **three** sessions open, click Switch; `/status` in all three shows the new email after one message; `claude auth status --json | jq -r .email` matches; `bash tests/acceptance/check-single-holder.sh <profiles-root> <live-dir>` prints `duplicates=0` and exits 0; a subagent fan-out started before the switch completes without error (AC 2); then run several turns in an old session and start and stop a fresh session, and `jq -r .oauthAccount.emailAddress <live-state-file>` still prints the incoming email (state-file drift probe); once per acceptance run, `bash tests/acceptance/check-live-identity.sh` makes a single honest-UA `GET /api/oauth/profile` with the live access token and prints the billed email, which must match.
 
 ### Phase 2: Quota reads and parked-pair credential refresh [TODO]
@@ -435,7 +435,7 @@ time, plus login expiry (AC 4). Behavioral references: `spike-usage-probe.py`,
   reservation.
 - [ ] **2.4** Ports `IUsageEndpointClient`, `ITokenRefreshClient`; adapters
   `AnthropicUsageEndpointClient` and `ClaudeOAuthTokenRefreshClient` via `IHttpClientFactory` typed
-  clients, 20-second timeout, `User-Agent: account-rotation/<version> (+https://github.com/melodic-software/account-rotation)`,
+  clients, 20-second timeout, `User-Agent: claude-code-account-rotation/<version> (+https://github.com/melodic-software/claude-code-account-rotation)`,
   `anthropic-beta: oauth-2025-04-20` on the usage read, Claude Code's public client id on the refresh
   as spike 03 did. Errors map to `UsageReadFailure`; `Retry-After` parsed from the 429.
 - [ ] **2.5** `QuotaRefresh` under the `CredentialMutationGate`: Refresh all iterates non-paused
@@ -500,7 +500,7 @@ decision-point auto-refresh (AC 5). Pure functions over `AccountStanding` rows.
 - `QuotaRefreshTests.DecisionPointRefreshesTopThreeOnly`: with five eligible accounts and the active crossing to 81 percent, exactly three usage GETs are sent, and none for an account read 30 s earlier.
 - `QuotaRefreshTests.UnchangedStateSendsNoUsageReads`: 360 dashboard reads over a simulated hour with the active account steady at 85 percent send zero usage GETs.
 - `SwitchAdvisorTests.CooldownSurvivesRestart`: a switch-back proposal at T, a new advisor built from the persisted state at T + 10 min, no second proposal.
-- `grep -rn "System.Threading.Timer\|PeriodicTimer\|Task.Delay" src/AccountRotation.App/Quota/ | wc -l` prints `0` (no timer path in the refresh code; the one-second spacing lives in `RefreshBudget` pacing, asserted by name).
+- `grep -rn "System.Threading.Timer\|PeriodicTimer\|Task.Delay" src/ClaudeCodeAccountRotation.App/Quota/ | wc -l` prints `0` (no timer path in the refresh code; the one-second spacing lives in `RefreshBudget` pacing, asserted by name).
 
 ### Phase 4: Roster operations and browser-assisted login [TODO]
 
@@ -546,19 +546,19 @@ work item settles the login mechanism (design thread T8).
 - `.work/claude-subscription-rotation/spike-05b-piped-login.md` exists and its first line matches `^# Spike 05b .* (PASS|FAIL)$`.
 - `dotnet test` exit 0; `RosterEndpointTests`: add → `Directory.Exists(<profiles>/<sanitized>)`; pause → absent from `/api/dashboard` queue, present in cards; remove → folder gone; remove on the live email → 409; adopt-live → roster contains the live email.
 - `ChromiumFamilyBrowserLauncherTests`: recorded arguments equal `["--profile-directory=Profile 3", "<url>"]` for Chrome with profile `Profile 3`.
-- `grep -rln "UseShellExecute = true\|cmd.exe" src/AccountRotation.App/Adapters/` prints exactly one path, `src/AccountRotation.App/Adapters/Process/ClaudeExecutableLocator.cs` (the documented npm-shim exception); no other adapter shells out.
+- `grep -rln "UseShellExecute = true\|cmd.exe" src/ClaudeCodeAccountRotation.App/Adapters/` prints exactly one path, `src/ClaudeCodeAccountRotation.App/Adapters/Process/ClaudeExecutableLocator.cs` (the documented npm-shim exception); no other adapter shells out.
 - Live acceptance (human): Login for a parked account opens the roster's browser and profile with the email pre-filled; after completion `CLAUDE_CONFIG_DIR=<folder> claude auth status --json | jq -r .email` prints that email and the card shows "login expires in ~28 days".
 
 ### Phase 5: Packaging, portability, and release [TODO]
 
 One executable, a config template, one login, working dashboard on a fresh Windows machine (AC 8).
 
-- [ ] **5.1** Publish profile: `dotnet publish src/AccountRotation.App -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish/win-x64`; also build (not publish) for `linux-x64` and `osx-arm64` in CI to keep the code portable.
+- [ ] **5.1** Publish profile: `dotnet publish src/ClaudeCodeAccountRotation.App -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish/win-x64`; also build (not publish) for `linux-x64` and `osx-arm64` in CI to keep the code portable.
 - [ ] **5.2** First-run behavior: missing `config.json` → written from the embedded template with
   runtime-resolved defaults, message printed with the path; `--help` documents every flag; the
   process prints the dashboard URL and opens nothing automatically.
 - [ ] **5.3** `.github/workflows/release.yml`: on tag `v*`, publish and upload
-  `account-rotation-win-x64.exe` plus `config.template.json` as release assets; `README.md` install
+  `claude-code-account-rotation-win-x64.exe` plus `config.template.json` as release assets; `README.md` install
   section (download, place on PATH or make a shortcut, run once, add accounts) and a posture
   section that states plainly: every switch is a human click; the tool never calls the model API;
   it reads the undocumented usage endpoint with its own User-Agent, which the research rates GRAY
@@ -576,9 +576,9 @@ One executable, a config template, one login, working dashboard on a fresh Windo
 **Sanity Check:**
 
 - Publish exit 0; `ls publish/win-x64/*.exe | wc -l` prints `1`.
-- `publish/win-x64/account-rotation.exe --version` prints the assembly version; `account-rotation.exe --config <temp>/config.json --port 0` creates the file (`test -f`) and `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:<printed port>/api/dashboard` prints `200`.
-- `bash eng/check-no-machine-paths.sh` exit 0; `grep -c '"profilesRoot"' src/AccountRotation.App/config.template.json` prints `1` and `grep -c ':\\\\' src/AccountRotation.App/config.template.json` prints `0`.
-- `gh release view <tag> -R melodic-software/account-rotation --json assets -q '.assets[].name'` lists `account-rotation-win-x64.exe` and `config.template.json`.
+- `publish/win-x64/claude-code-account-rotation.exe --version` prints the assembly version; `claude-code-account-rotation.exe --config <temp>/config.json --port 0` creates the file (`test -f`) and `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:<printed port>/api/dashboard` prints `200`.
+- `bash eng/check-no-machine-paths.sh` exit 0; `grep -c '"profilesRoot"' src/ClaudeCodeAccountRotation.App/config.template.json` prints `1` and `grep -c ':\\\\' src/ClaudeCodeAccountRotation.App/config.template.json` prints `0`.
+- `gh release view <tag> -R melodic-software/claude-code-account-rotation --json assets -q '.assets[].name'` lists `claude-code-account-rotation-win-x64.exe` and `config.template.json`.
 - Laptop (human): dashboard reachable; `profilesRoot` override honored; recorded in `tests/acceptance/README.md`.
 
 ### Phase 6: `rate-limit-guard` tee `account` field (separate repository and PR) [DOING]
@@ -809,12 +809,12 @@ measurement before anything was applied.
 
 | Agent | Phase | ALLOWED files | LOC |
 |---|---|---|---|
-| main | 1 | `account-rotation/**` (except `docs/topics/**/PLAN.md` status edits, which are main-only anyway) | ~900 |
+| main | 1 | `claude-code-account-rotation/**` (except `docs/topics/**/PLAN.md` status edits, which are main-only anyway) | ~900 |
 | W6 | 6 | `claude-code-plugins/plugins/rate-limit-guard/scripts/statusline-tee.sh`, `scripts/statusline-tee.test.sh`, `reference/reader-contract.md`, `README.md`, `CHANGELOG.md`, `.claude-plugin/plugin.json` (version); the floor block only in every carrier `scripts/check-loop-lane-floor-drift.sh --check` lists (the three lane `SKILL.md` bodies, the `extract-ssot` orchestrated mode, the two `prompts/loops/` templates); `docs/conventions/loop-lane/README.md` §6 final paragraph only | ~250 |
 
 **W6 FORBIDDEN:** any file outside the list above; any line of a carrier outside its inlined floor
 block; the drift gate's registry (`scripts/check-loop-lane-floor-drift.sh`) unless the gate itself
-demands an entry; any file in `account-rotation`; staging or committing outside the consuming repo's
+demands an entry; any file in `claude-code-account-rotation`; staging or committing outside the consuming repo's
 commit convention (`/source-control:commit`).
 
 **W6 reports at end:** work items completed, per-criterion Sanity Check verdict (the four commands

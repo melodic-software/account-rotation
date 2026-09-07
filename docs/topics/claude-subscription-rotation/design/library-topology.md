@@ -1,27 +1,27 @@
-# Topology: account-rotation
+# Topology: claude-code-account-rotation
 
-Light-form design, 2026-09-04. Repository `melodic-software/account-rotation`, public, MIT.
+Light-form design, 2026-09-04. Repository `melodic-software/claude-code-account-rotation`, public, MIT.
 
 ## Solution layout
 
 ```text
-account-rotation/
-  AccountRotation.slnx
+claude-code-account-rotation/
+  ClaudeCodeAccountRotation.slnx
   global.json                         # SDK 10.0.400, rollForward disable (org pin)
   Directory.Build.props               # imports eng/dotnet-analysis/Directory.Build.props; TargetFramework net10.0
   Directory.Packages.props            # central package versions
   eng/dotnet-analysis/                # synced from melodic-software/standards (dotnet-analysis component)
   src/
-    AccountRotation.Core/             # domain, ports, pure operations; BCL only
+    ClaudeCodeAccountRotation.Core/             # domain, ports, pure operations; BCL only
       Identity/                       # AccountEmail, ProfileFolderName, OAuthAccountBlock, CredentialPair, ParkedProfile, LiveAccountState
       Switching/                      # SwitchPlanner, SwitchPlan, SwitchRefusal, SwitchOutcome
       Quota/                          # UsageLimit, UsageSnapshot, UsageResponseParser, StatuslineSnapshot, RefreshBudget, UsageReadFailure
       Routing/                        # RoutingPolicy, AccountStanding, AccountRanking, QueueCandidate, SwitchAdvisor, SwitchProposal
       Roster/                         # RosterEntry, Roster, BrowserKind
-      Configuration/                  # AccountRotationConfiguration, RefreshBudgetSettings
+      Configuration/                  # ClaudeCodeAccountRotationConfiguration, RefreshBudgetSettings
       Ports/                          # the six interfaces (design thread T11)
       Result.cs
-    AccountRotation.App/              # the executable
+    ClaudeCodeAccountRotation.App/              # the executable
       Program.cs                      # composition root, Kestrel on 127.0.0.1, routes
       Endpoints/                      # one file per route group: Dashboard, Switch, Refresh, Roster, Login
       Dashboard/                      # DashboardAssembler, view records
@@ -38,8 +38,8 @@ account-rotation/
       wwwroot/                        # index.html, app.js, app.css (embedded resources, no build step)
       config.template.json            # shipped template; no literal paths
   tests/
-    AccountRotation.Core.Tests/       # xunit v3 + MTP, Shouldly; fixtures/usage-response-*.json
-    AccountRotation.App.Tests/        # adapter tests over temp dirs and fake handlers; endpoint tests via WebApplicationFactory
+    ClaudeCodeAccountRotation.Core.Tests/       # xunit v3 + MTP, Shouldly; fixtures/usage-response-*.json
+    ClaudeCodeAccountRotation.App.Tests/        # adapter tests over temp dirs and fake handlers; endpoint tests via WebApplicationFactory
     acceptance/                       # scripted checklist for Brief criteria needing the real CLI, sessions, browser
   docs/
     topics/claude-subscription-rotation/   # this contract slice, moved in at Phase 0
@@ -50,14 +50,14 @@ account-rotation/
 ## Dependency graph
 
 ```text
-AccountRotation.App  ──►  AccountRotation.Core  ──►  (BCL only)
+ClaudeCodeAccountRotation.App  ──►  ClaudeCodeAccountRotation.Core  ──►  (BCL only)
         │
         ├──► Microsoft.AspNetCore.App (framework reference: Kestrel, minimal API, static files)
         ├──► Microsoft.Extensions.Http (typed HttpClient via the factory; org overlay: no captive HttpClient)
         └──► System.Text.Json (in-box)
 
-AccountRotation.Core.Tests ──► Core
-AccountRotation.App.Tests  ──► App, Core, Microsoft.AspNetCore.Mvc.Testing
+ClaudeCodeAccountRotation.Core.Tests ──► Core
+ClaudeCodeAccountRotation.App.Tests  ──► App, Core, Microsoft.AspNetCore.Mvc.Testing
 ```
 
 Core references no package. The App's only NuGet dependencies are the hosting and HTTP-factory
@@ -88,7 +88,7 @@ Every JSON write in the App goes through it.
 ## Configuration surface
 
 `<appdata>/config.json` (created from `config.template.json` on first run) and `<appdata>/roster.json`,
-where `<appdata>` is `%LOCALAPPDATA%\account-rotation` on Windows and the XDG config directory
+where `<appdata>` is `%LOCALAPPDATA%\claude-code-account-rotation` on Windows and the XDG config directory
 elsewhere. Command-line overrides: `--config <path>`, `--port <n>`, `--version`, `--help`. No
 environment variable is read except `CLAUDE_CONFIG_DIR` (to find the live dir, matching the CLI) and
 the platform's home and app-data variables.

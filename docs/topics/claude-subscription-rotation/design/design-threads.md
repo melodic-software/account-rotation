@@ -1,4 +1,4 @@
-# Design threads: account-rotation
+# Design threads: claude-code-account-rotation
 
 Light-form design, 2026-09-04. Status vocabulary: **resolved** (decided by the Brief, a spike, or
 an org standard, with the source named), **directional** (a direction chosen here with rationale;
@@ -11,11 +11,11 @@ Every thread below is resolved, directional, or tagged-deferred. No thread is op
 
 Two source projects and two test projects:
 
-- `AccountRotation.Core`: domain types, ports (interfaces), and pure operations (parsing, ranking,
+- `ClaudeCodeAccountRotation.Core`: domain types, ports (interfaces), and pure operations (parsing, ranking,
   switch planning, sanitization, refresh budget). Depends on nothing but the BCL.
-- `AccountRotation.App`: the executable. Kestrel minimal API, the embedded static page, every
+- `ClaudeCodeAccountRotation.App`: the executable. Kestrel minimal API, the embedded static page, every
   adapter (file system, HTTP, process, browser), configuration loading, and the composition root.
-- `AccountRotation.Core.Tests`, `AccountRotation.App.Tests`.
+- `ClaudeCodeAccountRotation.Core.Tests`, `ClaudeCodeAccountRotation.App.Tests`.
 
 Rationale: the org's `architecture-and-design.md` "Dependency direction" and "Testable by design"
 want the logic that decides (ranking, refusals, parsing) separated from the code that touches the
@@ -129,7 +129,7 @@ removes the manual step the goal statement calls out, and the spike is cheap.
 
 Kestrel binds `127.0.0.1` on the configured port. Mutating endpoints (`POST`, `PATCH`, `DELETE`)
 require the request's `Origin` header to equal the app's own origin, or be absent, and require a
-custom header (`X-Account-Rotation: 1`), so a cross-site form post and a cross-origin `fetch` are
+custom header (`X-Claude-Code-Account-Rotation: 1`), so a cross-site form post and a cross-origin `fetch` are
 both refused before any handler runs. No CORS. The page never receives token material; responses
 carry emails, percentages, times, and fingerprints only. Logs carry no tokens (the credential types
 have no `ToString` over secret fields). Alternative: a per-launch bearer token embedded in the page.
@@ -138,7 +138,7 @@ without preflight.
 
 ## T10. Configuration and defaults — resolved (Brief Q16, Q22)
 
-One `config.json` under the per-user app-data dir (`%LOCALAPPDATA%\account-rotation` on Windows;
+One `config.json` under the per-user app-data dir (`%LOCALAPPDATA%\claude-code-account-rotation` on Windows;
 XDG config dir elsewhere), created on first run from the shipped `config.template.json`. Keys: live
 config dir (default `CLAUDE_CONFIG_DIR` or `~/.claude`), profiles root (default `~/.claude-profiles`),
 tee path, listen port, routing policy, refresh budget, browser executable overrides, lock wait bound,

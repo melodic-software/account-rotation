@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ClaudeCodeAccountRotation.Core/ClaudeCodeAccountRotation.Core.csproj" />
+    <Project Path="src/ClaudeCodeAccountRotation.App/ClaudeCodeAccountRotation.App.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ClaudeCodeAccountRotation.Core.Tests/ClaudeCodeAccountRotation.Core.Tests.csproj" />
+    <Project Path="tests/ClaudeCodeAccountRotation.App.Tests/ClaudeCodeAccountRotation.App.Tests.csproj" />
+  </Folder>
+</Solution>
