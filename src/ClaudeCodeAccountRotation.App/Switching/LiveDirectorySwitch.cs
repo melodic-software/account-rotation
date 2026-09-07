@@ -25,6 +25,19 @@ internal sealed partial class LiveDirectorySwitch
     private const string LiveOwnerFileName = "live-owner.json";
     private static readonly TimeSpan _secondaryLockGuardAge = TimeSpan.FromSeconds(60);
 
+    // AttributesToSkip is cleared because the default hides Hidden and System
+    // files, and every temporary this writer makes starts with a dot, which
+    // some tools mark hidden. IgnoreInaccessible on the deep walk so one
+    // unreadable nested directory costs itself rather than the whole leg; the
+    // SearchOption overloads would abort the enumeration instead.
+    private static readonly EnumerationOptions _shallowSweep = new() { AttributesToSkip = FileAttributes.None };
+    private static readonly EnumerationOptions _deepSweep = new()
+    {
+        AttributesToSkip = FileAttributes.None,
+        RecurseSubdirectories = true,
+        IgnoreInaccessible = true,
+    };
+
     private readonly ICredentialPairStore _pairs;
     private readonly ClaudeStateFile _stateFile;
     private readonly ProfileFolderStore _profiles;
@@ -346,7 +359,7 @@ internal sealed partial class LiveDirectorySwitch
         List<string> roots = [_options.LiveConfigDirectory, .. ProfileFolders()];
         foreach (string root in roots.Where(Directory.Exists))
         {
-            foreach (string path in ListTemporaries(root, SearchOption.TopDirectoryOnly))
+            foreach (string path in ListTemporaries(root, _shallowSweep))
             {
                 yield return path;
             }
@@ -357,7 +370,7 @@ internal sealed partial class LiveDirectorySwitch
             // App data holds the journal, the owner record, the snapshot cache, and
             // the recovery files, in nested directories, so this leg goes deep. The
             // quarantine itself is skipped: its contents are already at rest.
-            foreach (string path in ListTemporaries(_options.AppDataDirectory, SearchOption.AllDirectories)
+            foreach (string path in ListTemporaries(_options.AppDataDirectory, _deepSweep)
                 .Where(path => !path.StartsWith(_quarantineDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)))
             {
                 yield return path;
@@ -372,11 +385,11 @@ internal sealed partial class LiveDirectorySwitch
     /// on one profile folder must not silently cost the live directory its sweep
     /// and let a switch proceed over a stranded credential temporary.
     /// </summary>
-    private IReadOnlyList<string> ListTemporaries(string root, SearchOption option)
+    private IReadOnlyList<string> ListTemporaries(string root, EnumerationOptions options)
     {
         try
         {
-            return [.. Directory.EnumerateFiles(root, ".*.tmp", option).Where(IsOwnTemporary)];
+            return [.. Directory.EnumerateFiles(root, ".*.tmp", options).Where(IsOwnTemporary)];
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
