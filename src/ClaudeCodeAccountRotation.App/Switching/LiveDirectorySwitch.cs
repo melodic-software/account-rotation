@@ -189,9 +189,19 @@ internal sealed partial class LiveDirectorySwitch
         // no journal knows about, so neither of those guards sees it. Checked here
         // rather than read from the startup report, because the crash that strands
         // one can happen while the tool is running.
+        string? strandedTemporary = StrandedCredentialTemporary();
+        if (strandedTemporary is not null)
+        {
+            // Named in the log here, because the reconciliation banner is written
+            // once at startup and a temporary stranded since then would otherwise
+            // refuse every switch with nothing anywhere telling the operator which
+            // file to deal with.
+            LogStrandedTemporary(strandedTemporary);
+        }
+
         bool journalOpen = await _journal.ReadOpenAsync(cancellationToken) is not null
             || QuarantineHoldsFiles()
-            || StrandedCredentialTemporary() is not null;
+            || strandedTemporary is not null;
         AccountEmail? liveOwner = await ReadLiveOwnerAsync(live, cancellationToken);
         DateTimeOffset now = _timeProvider.GetUtcNow();
 
