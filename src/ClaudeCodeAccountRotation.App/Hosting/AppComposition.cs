@@ -27,6 +27,7 @@ internal static class AppComposition
     private const string ConfigPathSettingKey = "ClaudeCodeAccountRotation:ConfigPath";
     private const string ConfigFileName = "config.json";
     private static readonly TimeSpan _cliTimeout = TimeSpan.FromSeconds(30);
+    private static readonly string[] _redactedHeaders = ["Authorization"];
 
     public static string Version =>
         typeof(AppComposition).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
@@ -85,13 +86,7 @@ internal static class AppComposition
         services.AddSingleton(new ProfileFolderStore(configuration.ProfilesRoot));
         services.AddSingleton(new RateLimitGuardTeeFileReader(configuration.StatuslineTeePath));
 
-        // The two outbound calls the tool ever makes, both on demand and never on a
-        // timer, each through the factory so no captive HttpClient outlives DNS.
-        string userAgent = AnthropicEndpoints.UserAgent(configuration.UserAgentProductToken, Version);
-        services.AddHttpClient(nameof(AnthropicUsageEndpointClient))
-            .AddTypedClient<IUsageEndpointClient>(http => new AnthropicUsageEndpointClient(http, userAgent, TimeProvider.System));
-        services.AddHttpClient(nameof(ClaudeOAuthTokenRefreshClient))
-            .AddTypedClient<ITokenRefreshClient>(http => new ClaudeOAuthTokenRefreshClient(http, userAgent, TimeProvider.System));
+        AddOutboundClients(services, AnthropicEndpoints.UserAgent(configuration.UserAgentProductToken, Version));
         services.AddSingleton(new SwitchJournal(configuration.AppDataDirectory));
         services.AddSingleton<CredentialMutationGate>();
         services.AddSingleton(ManagedLoginPolicyReader.ForCurrentMachine());
@@ -121,6 +116,25 @@ internal static class AppComposition
         app.MapGet("/", static () => Results.Content(EmbeddedPage.IndexHtml, "text/html; charset=utf-8"));
         DashboardEndpoints.Map(app);
         SwitchEndpoints.Map(app);
+    }
+
+    /// <summary>
+    /// The two outbound calls the tool ever makes, both on demand and never on a
+    /// timer, each through the factory so no captive HttpClient outlives DNS.
+    /// The factory's own logging handler writes every request header at Trace,
+    /// so <c>Authorization</c> is redacted before it can carry an access token
+    /// into a log file. Registered here rather than inline so a test exercises
+    /// the same wiring the app runs.
+    /// </summary>
+    internal static void AddOutboundClients(IServiceCollection services, string userAgent)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        services.AddHttpClient(nameof(AnthropicUsageEndpointClient))
+            .RedactLoggedHeaders(_redactedHeaders)
+            .AddTypedClient<IUsageEndpointClient>(http => new AnthropicUsageEndpointClient(http, userAgent, TimeProvider.System));
+        services.AddHttpClient(nameof(ClaudeOAuthTokenRefreshClient))
+            .RedactLoggedHeaders(_redactedHeaders)
+            .AddTypedClient<ITokenRefreshClient>(http => new ClaudeOAuthTokenRefreshClient(http, userAgent, TimeProvider.System));
     }
 
     private static IClaudeCliAuthStatus ResolveCli(ClaudeCodeAccountRotationConfiguration configuration)
