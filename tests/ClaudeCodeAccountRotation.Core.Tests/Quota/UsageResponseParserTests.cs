@@ -1,0 +1,96 @@
+using System.Text.Json;
+using ClaudeCodeAccountRotation.Core.Quota;
+
+namespace ClaudeCodeAccountRotation.Core.Tests.Quota;
+
+public sealed class UsageResponseParserTests
+{
+    /// <summary>Spike 01's recorded response shape, codenamed null buckets included.</summary>
+    private static JsonDocument Spike01() =>
+        JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "usage-response-spike01.json")));
+
+    [Fact]
+    public void ParsesEveryLimitInTheSpikeFixture()
+    {
+        using JsonDocument body = Spike01();
+
+        IReadOnlyList<UsageLimit> limits = UsageResponseParser.ParseLimits(body.RootElement).Value;
+
+        limits.Count.ShouldBe(3);
+        limits.Select(limit => limit.Kind).ShouldBe([LimitKind.Session, LimitKind.WeeklyAll, LimitKind.WeeklyScoped]);
+        limits[0].Percent.ShouldBe(43);
+        limits[0].Group.ShouldBe("session");
+        limits[0].ResetsAt.ShouldBe(DateTimeOffset.Parse("2026-09-04T05:29:59Z", System.Globalization.CultureInfo.InvariantCulture));
+        limits[1].Percent.ShouldBe(20);
+        limits.ShouldAllBe(limit => limit.IsActive);
+    }
+
+    [Fact]
+    public void WeeklyScopedCarriesItsScopeDisplayName()
+    {
+        using JsonDocument body = Spike01();
+
+        IReadOnlyList<UsageLimit> limits = UsageResponseParser.ParseLimits(body.RootElement).Value;
+
+        UsageLimit scoped = limits.Single(limit => limit.Kind == LimitKind.WeeklyScoped);
+        scoped.ScopeDisplayName.ShouldBe("Fable");
+        scoped.Percent.ShouldBe(34);
+        scoped.Severity.ShouldBe("warning");
+    }
+
+    [Fact]
+    public void LimitsWithoutAScopeCarryNoDisplayName()
+    {
+        using JsonDocument body = Spike01();
+
+        IReadOnlyList<UsageLimit> limits = UsageResponseParser.ParseLimits(body.RootElement).Value;
+
+        limits.Where(limit => limit.Kind != LimitKind.WeeklyScoped).ShouldAllBe(limit => limit.ScopeDisplayName == null);
+    }
+
+    [Fact]
+    public void AnUnknownKindStillParsesAndKeepsItsRawName()
+    {
+        using var body = JsonDocument.Parse("""
+            {"limits":[{"kind":"monthly_something_new","group":"monthly","percent":7.5,"resets_at":1789315200,"is_active":true}]}
+            """);
+
+        UsageLimit limit = UsageResponseParser.ParseLimits(body.RootElement).Value.Single();
+
+        limit.Kind.ShouldBe(LimitKind.Unknown);
+        limit.RawKind.ShouldBe("monthly_something_new");
+        limit.Percent.ShouldBe(7.5);
+        limit.ResetsAt.ShouldBe(DateTimeOffset.FromUnixTimeSeconds(1789315200));
+    }
+
+    [Fact]
+    public void ABodyWithNoLimitsArrayFails()
+    {
+        using var body = JsonDocument.Parse("""{"five_hour":{"utilization":43}}""");
+
+        Result<IReadOnlyList<UsageLimit>, string> parsed = UsageResponseParser.ParseLimits(body.RootElement);
+
+        parsed.IsFailure.ShouldBeTrue();
+        parsed.Error.ShouldContain("no limits array");
+    }
+
+    [Fact]
+    public void ParsesTheExtraUsageBlock()
+    {
+        using JsonDocument body = Spike01();
+
+        ExtraUsageState extra = UsageResponseParser.ParseExtraUsage(body.RootElement)!;
+
+        extra.IsEnabled.ShouldBeFalse();
+        extra.DisabledReason.ShouldBe("not_enabled");
+        extra.SpendLimitReached.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void ABodyWithoutExtraUsageYieldsNoState()
+    {
+        using var body = JsonDocument.Parse("""{"limits":[]}""");
+
+        UsageResponseParser.ParseExtraUsage(body.RootElement).ShouldBeNull();
+    }
+}
