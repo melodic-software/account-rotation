@@ -1,5 +1,6 @@
 using System.Reflection;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
+using ClaudeCodeAccountRotation.App.Adapters.Http;
 using ClaudeCodeAccountRotation.App.Adapters.Process;
 using ClaudeCodeAccountRotation.App.Configuration;
 using ClaudeCodeAccountRotation.App.Dashboard;
@@ -83,6 +84,14 @@ internal static class AppComposition
         services.AddSingleton(new ClaudeStateFile(configuration.StateFilePath));
         services.AddSingleton(new ProfileFolderStore(configuration.ProfilesRoot));
         services.AddSingleton(new RateLimitGuardTeeFileReader(configuration.StatuslineTeePath));
+
+        // The two outbound calls the tool ever makes, both on demand and never on a
+        // timer, each through the factory so no captive HttpClient outlives DNS.
+        string userAgent = AnthropicEndpoints.UserAgent(configuration.UserAgentProductToken, Version);
+        services.AddHttpClient(nameof(AnthropicUsageEndpointClient))
+            .AddTypedClient<IUsageEndpointClient>(http => new AnthropicUsageEndpointClient(http, userAgent, TimeProvider.System));
+        services.AddHttpClient(nameof(ClaudeOAuthTokenRefreshClient))
+            .AddTypedClient<ITokenRefreshClient>(http => new ClaudeOAuthTokenRefreshClient(http, userAgent, TimeProvider.System));
         services.AddSingleton(new SwitchJournal(configuration.AppDataDirectory));
         services.AddSingleton<CredentialMutationGate>();
         services.AddSingleton(ManagedLoginPolicyReader.ForCurrentMachine());
