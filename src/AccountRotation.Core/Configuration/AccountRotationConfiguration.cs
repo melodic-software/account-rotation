@@ -1,0 +1,16 @@
+namespace AccountRotation.Core.Configuration;
+
+/// <summary>
+/// Everything the tool reads from its configuration file. Every path defaults
+/// from the user profile at runtime; the shipped template carries no literal
+/// path, drive letter, or user name.
+/// </summary>
+public sealed record AccountRotationConfiguration(
+    string LiveConfigDirectory,
+    string StateFilePath,
+    string ProfilesRoot,
+    string AppDataDirectory,
+    int ListenPort,
+    TimeSpan RefreshLockWaitBound,
+    string? ClaudeExecutable,
+    string UserAgentProductToken);

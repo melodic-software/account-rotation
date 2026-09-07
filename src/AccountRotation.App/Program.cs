@@ -1,15 +1,36 @@
+using AccountRotation.App.Configuration;
+using AccountRotation.App.Hosting;
+using AccountRotation.Core;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Hosting;
+
+Result<StartupArguments, string> parsed = StartupArguments.Parse(args);
+if (parsed.IsFailure)
+{
+    await Console.Error.WriteLineAsync(parsed.Error);
+    return 2;
+}
+
+if (parsed.Value.ShowHelp)
+{
+    await Console.Out.WriteLineAsync(StartupArguments.Usage);
+    return 0;
+}
+
+if (parsed.Value.ShowVersion)
+{
+    await Console.Out.WriteLineAsync(AppComposition.Version);
+    return 0;
+}
 
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
-
-// Loopback only: the page is a local control surface, never a network service.
-builder.WebHost.ConfigureKestrel(static kestrel => kestrel.ListenLocalhost(48211));
+Result<Unit, string> composed = await AppComposition.ComposeAsync(builder, parsed.Value, CancellationToken.None);
+if (composed.IsFailure)
+{
+    await Console.Error.WriteLineAsync(composed.Error);
+    return 1;
+}
 
 WebApplication app = builder.Build();
-
-app.MapGet("/healthz", static () => Results.Ok(new { status = "ok" }));
-
+AppComposition.MapRoutes(app);
 await app.RunAsync();
+return 0;

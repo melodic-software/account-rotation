@@ -6,10 +6,18 @@
     <RootNamespace>AccountRotation.App</RootNamespace>
     <AssemblyName>account-rotation</AssemblyName>
     <IsPackable>false</IsPackable>
+    <!-- LibraryImport's generated string marshalling for the exclusive-mkdir
+         P/Invokes behind the refresh lock. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The page ships inside the executable; no build step, no files beside it. -->
+    <EmbeddedResource Include="wwwroot\**" />
   </ItemGroup>
 
   <ItemGroup>

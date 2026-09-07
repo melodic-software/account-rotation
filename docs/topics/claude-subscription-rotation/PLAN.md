@@ -117,7 +117,7 @@ real page, real files, and real `claude auth status`, before any quota or rankin
 one remaining feasibility unknown (the login mechanism, design thread T8) is gated by a throwaway
 spike inside Phase 4, not by a phase of its own.
 
-### Phase 0: Repository, toolchain, and first vertical test [DOING]
+### Phase 0: Repository, toolchain, and first vertical test [DONE]
 
 Review: architecture
 
@@ -126,15 +126,18 @@ analyzer posture, with one real behavior under test so the test lane is proven b
 
 **Human-run steps** (the user's own deploys; the implementer prepares the diffs and stops):
 
-- [x] **0.1** (PR prepared 2026-09-05: github-iac#405, awaiting the user's `pulumi up`. Deviation
+- [x] **0.1** (github-iac#405 merged 2026-09-05 as `7bc660c`; `pulumi up` applied the same day: four
+  resources created, three custom-property defaults re-asserted. Deviation
   recorded: `RequiresSecurityReview` and `UsesClaudeReview` are **false** at creation, not true as
   written below, because the synced `components/claude-lanes/` callers name the private fleet's
   runner label and runner-policy refuses them on a public repository; hosted callers arrive by
   repo-local PR and both flags flip in the same change as `RequiresCi`, Phase 5.5.) In `melodic-software/github-iac`, add a `GovernedRepositorySpec` entry
   `new("account-rotation", a => { a.Description = "Machine-wide Claude Max account switching and quota dashboard for Claude Code: parked credential pairs, one live config dir, no browser step."; a.Visibility = "public"; a.Topics = new[] { "claude-code", "dotnet", "csharp", "windows", "developer-tools" }; a.AutoInit = true; a.SecurityAndAnalysis = SecretScanning("enabled"); }, RequiresCi: false, RequiresSecurityReview: true, UsesClaudeReview: true, VulnerabilityAlerts: true, DependabotSecurityUpdates: true)`.
-  `RequiresCi` stays false until the four ci-gate callers land (Phase 5), per the record's own comment.
+  `RequiresCi` stays false until `main` emits the org's `ci-status` context (Phase 5); github-iac#409
+  folded the four ci-gate callers into that single context after this item was written.
   Open the PR; the user runs `pulumi preview` and `pulumi up`.
-- [x] **0.2** (PR prepared 2026-09-05: standards#528, to merge after the App grant. Deviations
+- [x] **0.2** (standards#528 merged 2026-09-05 as `fdac203` after the App grant; the first sync PR,
+  account-rotation#1, merged the same day as `89afad3` and now owns `eng/dotnet-analysis/`. Deviations
   recorded: the two `claude-*-caller` components are **excluded** (private-only, see 0.1);
   `managed-files-guard-caller` and `typos` are **included** (every public hosted-only target carries
   both); `automerge: false` until `requires-ci` flips, since an armed sync PR would merge ungated.
@@ -145,7 +148,9 @@ analyzer posture, with one real behavior under test so the test lane is proven b
   `claude-review-caller, claude-security-review-caller, cloud-bootstrap, dotnet-analysis, editorconfig-checker, gitleaks, lefthook-base, lefthook-dotnet, lychee, markdownlint, node-runtime, pr-body-contract-rule, repository-text, review-instructions, shellcheck`.
   The user grants the repository in the `melodic-standards-sync` App installation UI **before** the
   manifest merge (github-iac README "Add an existing organization repository" order), then merges.
-- [ ] **0.3** Clone the new repo beside the other org checkouts (`<local-repos>/melodic-software/account-rotation`)
+- [x] **0.3** (2026-09-05: `git remote add` plus a rebase onto the AutoInit commit `afb674d`, which
+  carried only a two-line README; the skeleton landed as account-rotation#2, squash `5a2a657`, after
+  one Codex finding on the path gate was fixed in the same PR.) Clone the new repo beside the other org checkouts (`<local-repos>/melodic-software/account-rotation`)
   and move the contract slice in: copy `<spike-dir>/docs/topics/claude-subscription-rotation/` to
   `docs/topics/claude-subscription-rotation/`, and move `<spike-dir>/.work/` to `<repo>/.work/` (its
   self-ignoring `.gitignore` travels with it; nothing under `.work/` is staged). Before the first
@@ -208,20 +213,37 @@ analyzer posture, with one real behavior under test so the test lane is proven b
 - `bash eng/check-no-machine-paths.sh` exit 0.
 - `git -C <repo> status --porcelain | grep -c "^?? .work"` prints `0` (memory tier never staged).
 - `gh pr list -R melodic-software/account-rotation --state merged --search "chore: sync standards"` shows ≥ 1 merged sync PR (may land after 0.4; not a blocker for Phase 1).
+- Run 2026-09-05 after #1 and #2 merged: all six pass (`PUBLIC mit`; 9 tests on the skeleton and 115
+  on the Phase 1 branch; `eng/dotnet-analysis/` blobs on `main` identical to the sync's; `.work`
+  never staged; one merged sync PR).
 
-### Phase 1: Tracer bullet, machine-wide switch through the page [TODO]
+### Phase 1: Tracer bullet, machine-wide switch through the page [DONE]
 
 Review: security
 Review: concurrency
+
+Closed 2026-09-06 as account-rotation#3: the 1.5a probe and the live acceptance ran on the desktop
+with three sessions open (log in `tests/acceptance/README.md`); the security and concurrency
+reviews' Critical and Important findings are fixed in the same PR, the Suggestions are filed as
+issues #7 to #12, and a fresh-context verifier confirmed nineteen criteria at the merge head. The
+sanity check below holds with the test names as built (`ACrashBetweenUnparkAndPatchIsReconciledAtStartup`,
+`ConcurrentSwitchesSerializeAndLeaveOneHolderPerLineage`, `ConfigurationTests`); the
+switch-and-refresh serialization case waits for Phase 2's refresh client, as 1.5b records.
 
 The end-to-end slice: open the page, see the live account and every parked profile, click Switch,
 and every open Claude Code session bills the new account on its next request (AC 1, 2, 3, 9).
 Behavioral reference: `spike-04-swap.py` (memory slice), guard for guard.
 
-- [ ] **1.1** Core identity types (`design/type-inventory.md` "Identity and files"): `AccountEmail`,
+- [x] **1.1** (2026-09-05) Core identity types (`design/type-inventory.md` "Identity and files"): `AccountEmail`,
   `OAuthAccountBlock` (raw `JsonObject` preserved), `CredentialPair` (no `ToString` over tokens),
   `RefreshTokenFingerprint` (SHA-256 hex), `ParkedProfile`, `LiveAccountState`, and `Result<TValue, TError>`.
-- [ ] **1.2** `SwitchPlanner.Plan` (pure) with the `SwitchRefusal` cases in spike 04's order plus
+- [x] **1.2** (2026-09-05; deviations: the planner takes one `SwitchPlanningInput` record carrying
+  the inventory's parameters plus the profiles root and the live lineage's recorded owner;
+  `LiveIdentityUnverified` is checked **first**, since an unreconciled switch invalidates every
+  other answer including `AlreadyOnTarget`; a tenth refusal `MutationInProgress` is the executor's
+  answer to a second concurrent switch, the plan's 409. Review on #3, 2026-09-05: a live pair whose
+  account the state file does not name is refused `LiveIdentityUnverified` rather than planned with
+  `Outgoing = null`, because the unpark would fail onto the live file with the journal open.) `SwitchPlanner.Plan` (pure) with the `SwitchRefusal` cases in spike 04's order plus
   three the review added: `TargetLoginExpired` (parked `refreshTokenExpiresAt` in the past),
   `SwitchingBlockedByManagedPolicy` (a device-managed `forceLoginOrgUUID` is in effect), and
   `LiveIdentityUnverified` (an open switch journal, or a state-file account that does not match the
@@ -229,11 +251,23 @@ Behavioral reference: `spike-04-swap.py` (memory slice), guard for guard.
   "outgoing has no credentials" (post-`/login` overwrite case) yields a plan with `Outgoing = null`.
   `AccountEmail.Parse` rules stated and tested: exactly one `@`, no whitespace, no path separators,
   no control characters, 3 to 254 characters, lowercased.
-- [ ] **1.3** Ports `ICredentialPairStore` and `IClaudeCliAuthStatus` (returns
+- [x] **1.3** (2026-09-05; the `ManagedLoginPolicy` record lives in Core so the planner can consult
+  it, its reader `ManagedLoginPolicyReader` in the App; the reader ranks sources as the current
+  managed-settings docs do: HKLM `Settings` value, then `%ProgramFiles%\ClaudeCode\managed-settings.json`
+  on Windows, then HKCU, reading `forceLoginOrgUUID` from the highest-ranked present source only.)
+  Ports `ICredentialPairStore` and `IClaudeCliAuthStatus` (returns
   `Result<ClaudeAuthStatus, string>` carrying the failure detail, never null); `ManagedLoginPolicy`
   (reads the platform's managed settings file and, on Windows, the HKLM policy key; exposes
   `ForceLoginOrgUuid`).
-- [ ] **1.4** App concrete file classes: `AtomicJsonFile` (temp file in the target directory,
+- [x] **1.4** (2026-09-05; `AtomicBytesFile` is the byte-level half the state-file splice uses, the
+  JSON writer serializes through it; the live-dir cross-check against `projectsDirectory` is not
+  wired yet, it joins the dashboard warnings when the CLI status is read at startup in Phase 2.
+  Review on #3, 2026-09-05: the state-file patch stamps the file (existence, length, last-write
+  time) before the read and after the splice and writes only when the stamps agree, five attempts,
+  else it fails with the journal open for startup to complete; the volume check resolves the owning
+  mount point outside Windows, where a `DriveInfo` built from a path names the path itself and had
+  every configuration refused on the Ubuntu lane.)
+  App concrete file classes: `AtomicJsonFile` (temp file in the target directory,
   created with `UnixCreateMode` 0600 on non-Windows, `Flush(true)`, then `File.Replace` when the
   target exists or `File.Move` when it does not; retry a sharing violation with jittered backoff from
   50 ms up to 2 s total, then fail), `ClaudeStateFile` (re-read immediately before patch; locate the
@@ -253,7 +287,8 @@ Behavioral reference: `spike-04-swap.py` (memory slice), guard for guard.
   `%OneDriveCommercial%`, `%OneDriveConsumer%`, a `Dropbox` or `Google Drive` folder under the user
   profile): Files-On-Demand dehydrates a credential file into a placeholder, and a synced folder
   uploads refresh tokens, which is a second holder by another name.
-- [ ] **1.5** `OAuthRefreshLock`: the tool **participates in Claude Code's own refresh mutex**
+- [x] **1.5** (2026-09-05; `LibraryImport` of `CreateDirectoryW` and libc `mkdir`; the held lock's
+  mtime is not refreshed, a hold lasts milliseconds.) `OAuthRefreshLock`: the tool **participates in Claude Code's own refresh mutex**
   instead of sampling it. Verified in the installed binary (2.1.261): the CLI takes
   `<live dir>/.oauth_refresh.lock` through `proper-lockfile` (`stale: 60000`, `update: 5000`), a
   directory created with an exclusive `mkdir`, and a contending session gets the retryable
@@ -264,7 +299,26 @@ Behavioral reference: `spike-04-swap.py` (memory slice), guard for guard.
   `RefreshLockWaitBound` (default 10 s) and then refuses with `RefreshLockPresent`; it holds the lock
   across park → unpark → patch (milliseconds) and removes the directory in `finally`. The wildcard
   `*.lock` file scan stays only as a secondary guard. D2 is closed by this item.
-- [ ] **1.5a Probe (this desktop, before the first real switch):** perform one swap **without**
+- [x] **1.5a** (2026-09-06, this desktop, CLI 2.1.263: **keep the patch.** One switch with
+  `patchStateFile: false` and three sessions open. The credential move worked and every session
+  billed the incoming account on its next request (the statusline tee's buckets went from 28 and 68
+  percent to 6 and 3 percent), but nine minutes and many requests later `oauthAccount` still named
+  the outgoing account with `profileFetchedAt` untouched and `claude auth status --json` reported
+  the outgoing account: the binary does not re-stamp on an ordinary request. Two consequences.
+  First, the page derives liveness from the state file, so it showed the incoming account as
+  "needs login", and the planner would have refused the next switch (`AlreadyOnTarget` or
+  `TargetHasNoCredentials`); the `patchStateFile` knob was therefore removed the same day, the patch
+  is unconditional, and the risk table no longer claims a dashboard re-patch guard. Second, the first request after
+  the unpark refreshed the expired access token and rotated the refresh token, so `live-owner.json`
+  no longer matched the live fingerprint and the owner guard silently stopped applying; both are
+  fixed in #3. A third surfaced in the post-fix live check the same evening: eight minutes after
+  a switch a running session wrote its in-memory block back over the patch, naming the outgoing
+  account with a `profileFetchedAt` from before the switch, so the risk table's re-patch guard is
+  needed after all and is built (a state-file watcher plus every dashboard read, judged by the
+  owner record's timestamp). Recovery from the probe ran through the tool's own path: a journal at step
+  `Unparked` carrying the current fingerprint, then startup reconciliation patched the 90 KB state
+  file in one attempt and `claude auth status` reported the incoming account.) **Probe (this
+  desktop, before the first real switch):** perform one swap **without**
   patching the state file. The binary re-derives and writes `oauthAccount` itself after its next
   profile fetch (`stampAuthenticatedAccount` re-stamps on an email or uuid mismatch), so the patch
   may be redundant and it races the CLI's own write of an 88 KB file. If `claude auth status --json`
@@ -272,7 +326,15 @@ Behavioral reference: `spike-04-swap.py` (memory slice), guard for guard.
   the re-patch guard) from the design and record it here; if they do not, keep the patch, performed
   under the acquired lock immediately after the credential move, and treat the CLI's later rewrite
   of the block as expected. Either outcome is recorded as a dated note under this item.
-- [ ] **1.5b** `LiveDirectorySwitch` under the `CredentialMutationGate` (one `SemaphoreSlim(1, 1)`
+- [x] **1.5b** (2026-09-05; the parked-pair refresh before unparking waits for Phase 2's token
+  refresh client; a crash after the park and before the unpark is **unwound** (the outgoing pair
+  restored) rather than completed, the least surprising outcome for the user; the live lineage's
+  owner is recorded in `<appdata>/state/live-owner.json`; the mutation gate wait for a switch is
+  zero, so a second switch is the 409 immediately. Review on #3, 2026-09-05: the unwind acquires the
+  refresh lock like every other credential move and reports a block, moving nothing, while a session
+  holds it; the instance lock opens `instance.lock` with `FileShare.None` and publishes the URL in a
+  sibling `instance.url`, delete-on-close on Windows only, because .NET on Unix unlinks the path at
+  open and a second instance was starting on the Ubuntu lane.) `LiveDirectorySwitch` under the `CredentialMutationGate` (one `SemaphoreSlim(1, 1)`
   every credential-touching operation acquires with a timeout and releases in `finally`; a second
   concurrent switch gets 409) and the `InstanceLock` (an owner-only lock file under app data; a
   second instance refuses to start and prints the running instance's URL): snapshot live state →
@@ -289,17 +351,21 @@ Behavioral reference: `spike-04-swap.py` (memory slice), guard for guard.
   extra copy to `<appdata>/quarantine/` with a blocking banner, never silently deleted; until both
   reconcile, switching refuses with `LiveIdentityUnverified`. One structured log event per switch
   and per refusal; never a token.
-- [ ] **1.6** Configuration: `AccountRotationConfiguration`, `ConfigurationDefaults.ForCurrentUser()`
+- [x] **1.6** (2026-09-05; unknown command-line arguments pass through to the host rather than
+  failing, because `WebApplication.CreateBuilder` reads `--key value` pairs and the test host passes
+  its runner's own arguments to the entry point; the shipped template is the first-run file itself,
+  written with the defaults resolved.) Configuration: `AccountRotationConfiguration`, `ConfigurationDefaults.ForCurrentUser()`
   (live dir from `CLAUDE_CONFIG_DIR` else `~/.claude`; state file `~/.claude.json` when unset,
   `<dir>/.claude.json` when set; profiles root `~/.claude-profiles`; app data
   `%LOCALAPPDATA%\account-rotation` or XDG), `ConfigurationFile` (load; first run writes
   `config.template.json` content with defaults resolved at runtime), `--config`, `--port`, `--version`.
-- [ ] **1.7** Endpoints `GET /api/dashboard` (identity only in this phase: live account, parked
+- [x] **1.7** (2026-09-05; plus a loopback-Host middleware on every route; the bundled CA2025
+  analyzer crashes on the minimal-API lambdas and is off in `.globalconfig`.) Endpoints `GET /api/dashboard` (identity only in this phase: live account, parked
   profiles with `HasCredentials`, roster entries) and `POST /api/accounts/{email}/switch` (200
   `SwitchOutcome`, 409 `SwitchRefusal`), `SameOriginMutationFilter` on every mutating route.
-- [ ] **1.8** Page: `wwwroot/index.html`, `app.js`, `app.css` embedded; cards with email, live badge,
+- [x] **1.8** (2026-09-05) Page: `wwwroot/index.html`, `app.js`, `app.css` embedded; cards with email, live badge,
   "needs login" badge, Switch button; result toast; polls `GET /api/dashboard` every 10 s.
-- [ ] **1.9** `tests/acceptance/check-single-holder.sh`: SHA-256 of `claudeAiOauth.refreshToken` in the
+- [x] **1.9** (2026-09-05; the runbook also carries the 1.5a probe steps as its first section.) `tests/acceptance/check-single-holder.sh`: SHA-256 of `claudeAiOauth.refreshToken` in the
   live file and every `~/.claude-profiles/*/.credentials.json`; prints `files=N distinct=N duplicates=0`
   and exits 1 on any duplicate (the spike 04 hash check generalized to ten). `tests/acceptance/README.md`
   lists the human steps for AC 1, 2, 9.
@@ -308,25 +374,25 @@ Behavioral reference: `spike-04-swap.py` (memory slice), guard for guard.
 
 | File | Action | Rationale |
 |---|---|---|
-| [ ] `src/AccountRotation.Core/Result.cs` | CREATE | result type |
-| [ ] `src/AccountRotation.Core/Identity/{AccountEmail,OAuthAccountBlock,CredentialPair,RefreshTokenFingerprint,ParkedProfile,LiveAccountState}.cs` | CREATE | 1.1 |
-| [ ] `src/AccountRotation.Core/Switching/{SwitchPlanner,SwitchPlan,SwitchRefusal,SwitchOutcome}.cs` | CREATE | 1.2 |
-| [ ] `src/AccountRotation.Core/Ports/{ICredentialPairStore,IClaudeCliAuthStatus}.cs` | CREATE | 1.3 |
-| [ ] `src/AccountRotation.Core/Configuration/AccountRotationConfiguration.cs` | CREATE | 1.6 |
-| [ ] `src/AccountRotation.App/Adapters/FileSystem/{AtomicJsonFile,ClaudeStateFile,ProfileFolderStore,FileSystemCredentialPairStore}.cs` | CREATE | 1.4 |
-| [ ] `src/AccountRotation.App/Adapters/Process/ClaudeCliProcessAuthStatus.cs` | CREATE | 1.4 |
-| [ ] `src/AccountRotation.App/Adapters/FileSystem/OAuthRefreshLock.cs` (P/Invoke exclusive mkdir, stale steal at 60 s) | CREATE | 1.5 |
-| [ ] `src/AccountRotation.App/Switching/{LiveDirectorySwitch,SwitchJournal,CredentialMutationGate}.cs` | CREATE | 1.5b |
-| [ ] `src/AccountRotation.App/{InstanceLock,ManagedLoginPolicy}.cs`, `Adapters/Process/ClaudeExecutableLocator.cs` | CREATE | 1.3, 1.4, 1.5 |
-| [ ] `src/AccountRotation.Core/Identity/AccountEmail.cs` (Parse rules), `Switching/SwitchRefusal.cs` (nine cases) | MODIFY | 1.2 |
-| [ ] `src/AccountRotation.App/Configuration/{ConfigurationDefaults,ConfigurationFile}.cs`, `config.template.json` | CREATE | 1.6 |
-| [ ] `src/AccountRotation.App/Endpoints/{DashboardEndpoints,SwitchEndpoints}.cs`, `Dashboard/{DashboardAssembler,DashboardView,AccountCardView}.cs`, `Security/SameOriginMutationFilter.cs` | CREATE | 1.7 |
-| [ ] `src/AccountRotation.App/Program.cs` | MODIFY | composition root, explicit service types |
-| [ ] `src/AccountRotation.App/wwwroot/{index.html,app.js,app.css}` | CREATE | 1.8 |
-| [ ] `tests/AccountRotation.Core.Tests/Switching/SwitchPlannerTests.cs`, `Identity/*Tests.cs` | CREATE | output-based tests |
-| [ ] `tests/AccountRotation.App.Tests/Adapters/{AtomicJsonFileTests,ClaudeStateFileTests,FileSystemCredentialPairStoreTests,ProfileFolderStoreTests}.cs` | CREATE | state-based over temp dirs |
-| [ ] `tests/AccountRotation.App.Tests/Endpoints/SwitchEndpointTests.cs` | CREATE | `WebApplicationFactory`, doubles for the two ports |
-| [ ] `tests/acceptance/check-single-holder.sh` (takes `<profiles-root> <live-dir>` as arguments), `tests/acceptance/check-live-identity.sh`, `tests/acceptance/README.md` | CREATE | 1.9 |
+| [x] `src/AccountRotation.Core/Result.cs` | CREATE | result type |
+| [x] `src/AccountRotation.Core/Identity/{AccountEmail,OAuthAccountBlock,CredentialPair,RefreshTokenFingerprint,ParkedProfile,LiveAccountState}.cs` | CREATE | 1.1 |
+| [x] `src/AccountRotation.Core/Switching/{SwitchPlanner,SwitchPlan,SwitchRefusal,SwitchOutcome}.cs` (plus `SwitchPlanningInput`, `ManagedLoginPolicy`) | CREATE | 1.2 |
+| [x] `src/AccountRotation.Core/Ports/{ICredentialPairStore,IClaudeCliAuthStatus}.cs` | CREATE | 1.3 |
+| [x] `src/AccountRotation.Core/Configuration/AccountRotationConfiguration.cs` | CREATE | 1.6 |
+| [x] `src/AccountRotation.App/Adapters/FileSystem/{AtomicJsonFile,ClaudeStateFile,ProfileFolderStore,FileSystemCredentialPairStore}.cs` (plus `AtomicBytesFile`) | CREATE | 1.4 |
+| [x] `src/AccountRotation.App/Adapters/Process/ClaudeCliProcessAuthStatus.cs` | CREATE | 1.4 |
+| [x] `src/AccountRotation.App/Adapters/FileSystem/OAuthRefreshLock.cs` (P/Invoke exclusive mkdir, stale steal at 60 s) | CREATE | 1.5 |
+| [x] `src/AccountRotation.App/Switching/{LiveDirectorySwitch,SwitchJournal,CredentialMutationGate}.cs` (plus `SwitchOptions`) | CREATE | 1.5b |
+| [x] `src/AccountRotation.App/{Switching/InstanceLock,ManagedLoginPolicyReader}.cs`, `Adapters/Process/ClaudeExecutableLocator.cs` | CREATE | 1.3, 1.4, 1.5 |
+| [x] `src/AccountRotation.Core/Identity/AccountEmail.cs` (Parse rules), `Switching/SwitchRefusal.cs` (ten cases) | MODIFY | 1.2 |
+| [x] `src/AccountRotation.App/Configuration/{ConfigurationDefaults,ConfigurationFile,ConfigurationValidator,StartupArguments}.cs` (the first-run file is the template) | CREATE | 1.6 |
+| [x] `src/AccountRotation.App/Endpoints/{DashboardEndpoints,SwitchEndpoints}.cs`, `Dashboard/{DashboardAssembler,DashboardViews}.cs`, `Security/{SameOriginMutationFilter,LoopbackHostMiddleware}.cs`, `Hosting/{AppComposition,StartupReconciliation,InstanceLockHolder,EmbeddedPage}.cs` | CREATE | 1.7 |
+| [x] `src/AccountRotation.App/Program.cs` | MODIFY | composition root, explicit service types |
+| [x] `src/AccountRotation.App/wwwroot/{index.html,app.js,app.css}` | CREATE | 1.8 |
+| [x] `tests/AccountRotation.Core.Tests/Switching/SwitchPlannerTests.cs`, `Identity/*Tests.cs` | CREATE | output-based tests |
+| [x] `tests/AccountRotation.App.Tests/Adapters/{AtomicJsonFileTests,ClaudeStateFileTests,FileSystemCredentialPairStoreTests,ProfileFolderStoreTests,OAuthRefreshLockTests,ClaudeExecutableLocatorTests,ClaudeCliProcessAuthStatusTests}.cs`, `Switching/{LiveDirectorySwitchTests,CoordinationTests}.cs`, `Configuration/ConfigurationTests.cs`, `ManagedLoginPolicyReaderTests.cs` | CREATE | state-based over temp dirs |
+| [x] `tests/AccountRotation.App.Tests/Endpoints/SwitchEndpointTests.cs` (with `AppFactory`) | CREATE | `WebApplicationFactory`, doubles for the two ports |
+| [x] `tests/acceptance/check-single-holder.sh` (takes `<profiles-root> <live-dir>` as arguments), `tests/acceptance/check-live-identity.sh`, `tests/acceptance/README.md` | CREATE | 1.9 |
 
 **Sanity Check:**
 
@@ -500,8 +566,9 @@ One executable, a config template, one login, working dashboard on a fresh Windo
   public OAuth `client_id`; running the loop lanes (`work-loop`, `babysit-loop`, `attend-queue`)
   while rotating accounts is outside V1 because reader-side invalidation of a latched window is
   still #1218's open half.
-- [ ] **5.4** Flip `RequiresCi: true` in github-iac once the four ci-gate callers are on `main`
-  (human-run `pulumi up`).
+- [ ] **5.4** Flip `RequiresCi: true` in github-iac once `main` emits the org's `ci-status` context
+  (github-iac#409 folded the four ci-gate callers into that single context; the pr-contract
+  composite runs as its steps) (human-run `pulumi up`).
 - [ ] **5.5** Laptop install (human): follow the README on the laptop; reach a working dashboard
   with one login and no code edit; set `profilesRoot` to a non-default writable directory and confirm
   it is honored.
@@ -514,7 +581,7 @@ One executable, a config template, one login, working dashboard on a fresh Windo
 - `gh release view <tag> -R melodic-software/account-rotation --json assets -q '.assets[].name'` lists `account-rotation-win-x64.exe` and `config.template.json`.
 - Laptop (human): dashboard reachable; `profilesRoot` override honored; recorded in `tests/acceptance/README.md`.
 
-### Phase 6: `rate-limit-guard` tee `account` field (separate repository and PR) [TODO]
+### Phase 6: `rate-limit-guard` tee `account` field (separate repository and PR) [DOING]
 
 Review: security
 
@@ -523,7 +590,8 @@ account (AC 10; design thread T14). Repository `melodic-software/claude-code-plu
 `feat/rate-limit-guard-tee-account-field`, one PR referencing #1218. Fully independent of Phases 1
 to 5 except that Phase 2's `RateLimitGuardTeeFileReader` already parses the key when present.
 
-- [ ] **6.1 Pre-flight consumer check (first):** `bash scripts/check-loop-lane-floor-drift.sh --check`
+- [x] **6.1 Pre-flight consumer check (first):** (2026-09-05, worker W6; the six registered carriers
+  matched the floor before and after the change, and the full reader list is in the PR body.) `bash scripts/check-loop-lane-floor-drift.sh --check`
   prints the registered carriers (three lane `SKILL.md` bodies, the `extract-ssot` orchestrated mode,
   two launch-prompt templates) and `grep -rn "rate-limits.json" plugins/ docs/ prompts/ scripts/`
   lists every other reader. Record them in the PR body. The "Operable floor" staleness bullet states
@@ -532,7 +600,17 @@ to 5 except that Phase 2's `RateLimitGuardTeeFileReader` already parses the key 
   the six copies moved together). Measured on this desktop 2026-09-04 for the mechanism choice: state
   file 88 KB; bash `$(<file)` plus parameter-expansion extraction 3.6 to 4.0 s (unusable); `jq -r`
   over stdin 35 ms; `claude auth status --json` 175 ms.
-- [ ] **6.2** `plugins/rate-limit-guard/scripts/statusline-tee.sh`, **drain path only** (the render
+- [x] **6.2** (2026-09-05, worker W6; deviations: the batch jq pass emits a fifth line as well, whether
+  the chosen body already carries an account-shaped key, decided with `keys_unsorted` rather than a
+  substring test over the body; and every jq token line is CR-stripped in `_rlg_absorb_jq_lines`
+  because a native Windows jq terminates lines with CRLF and only the last line was ever clean, a
+  latent defect the two new lines exposed, fixed with the payload line left byte-for-byte intact;
+  the non-spool paths, `RLG_TEE_ASYNC=1` and bash below 4.2, write no `account` key since they have
+  no spool file to date the state file against. Codex review on claude-code-plugins#3778: the
+  staleness test now requires the spool record to be strictly newer than the state file, so equal
+  timestamps omit on coarse-mtime filesystems, and the value is validated on codepoints inside jq
+  before bash command substitution can strip a NUL or a trailing newline, with the bash checks kept
+  as a second layer.) `plugins/rate-limit-guard/scripts/statusline-tee.sh`, **drain path only** (the render
   path stays fork-free): after the batch jq chooses the record, resolve the state file
   (`$CLAUDE_CONFIG_DIR/.claude.json` when set, else `$HOME/.claude.json`) and read the identity with
   one `jq -r '.oauthAccount.emailAddress // empty' < "$state_file"` (bash opens the file, so the
@@ -545,13 +623,23 @@ to 5 except that Phase 2's `RateLimitGuardTeeFileReader` already parses the key 
   since, so the identity is omitted rather than mislabeled. To make (ii) possible the batch jq pass
   also emits the chosen shard name as a fourth line. Absent, malformed, or stale → no `account` key,
   statusline output unchanged. Header comments updated to match.
-- [ ] **6.3** `scripts/statusline-tee.test.sh` cases (`set -o pipefail`, temp cleanup on every exit
+- [x] **6.3** (2026-09-05, worker W6; 138 assertions pass on this desktop, twelve name `account.email`,
+  two guard the CRLF strip; control characters and the 254-character bound are covered by code, not
+  by a fixture.) `scripts/statusline-tee.test.sh` cases (`set -o pipefail`, temp cleanup on every exit
   path per the bash overlay): state file present → `account.email` equals it; absent → key absent;
   `CLAUDE_CONFIG_DIR` set → `<dir>/.claude.json` read; malformed value → key absent and wrapped
   statusline stdout byte-identical; stdin payload carrying `account_id` → passthrough wins and no
   injected `account`; state file touched after the spool record → key absent; the existing zero-fork
   render trace case still passes.
-- [ ] **6.4** Docs in the same PR: `reference/reader-contract.md` amends the floor's staleness bullet
+- [x] **6.4** (2026-09-05, worker W6; version `0.7.33` → `0.8.0`; the §6 paragraph changed is the
+  account-identity one, which precedes the guard-mode telemetry paragraph that actually closes §6.
+  Two deviations forced by that repository's gates: its changelog-parity gate requires a bump and an
+  entry for every plugin whose files change, so the three carrier plugins moved too (docs-hygiene
+  `0.21.38`, source-control `0.55.55`, work-items `0.39.64`, one bullet each), and the plugin README
+  is a purged surface, so its new sentences carry no em dashes. One deviation from the wording below:
+  the `TODO(#1218)` pointers were replaced with present-tense statements of what is not built,
+  because #1218 is closed as not planned and claude-code-plugins#3770 had removed that pointer for
+  exactly that reason; the PR body cites the issue once as lineage.) Docs in the same PR: `reference/reader-contract.md` amends the floor's staleness bullet
   ("the file carries an `account.email` field when the writer could attribute the observation; a
   write is still the signal that the windows changed under you") and documents the key, its source,
   the staleness guard, and the recheck trigger (`oauthAccount.emailAddress` is internal CLI state)
@@ -560,7 +648,11 @@ to 5 except that Phase 2's `RateLimitGuardTeeFileReader` already parses the key 
   updated from "designed elsewhere" to "writer-side identity landed; reader-side invalidation and the
   lane-floor re-audit remain #1218 follow-up"; plugin `README.md` multi-account paragraph updated;
   `CHANGELOG.md` entry; plugin version bump per the marketplace convention.
-- [ ] **6.5** Open the PR with `/source-control:pull-request`; body references #1218, lists the
+- [x] **6.5** (2026-09-05: claude-code-plugins#3778, opened by the main session after a fresh-context
+  verifier passed all eleven criteria; #1218 is closed as not planned, so the body cites it as `Refs`
+  with a `No related issue:` line rather than a closing keyword. Two Codex findings fixed and every
+  CI lane green; squash-merged 2026-09-06 as claude-code-plugins#3778, rate-limit-guard `0.8.0` is
+  live on the marketplace `main`. Phase 6 stays DOING for 6.6, which lands with Phase 2 here.) Open the PR with `/source-control:pull-request`; body references #1218, lists the
   consumers from 6.1, carries the timing numbers, and names the reader-side follow-up as out of scope.
 - [ ] **6.6** In this repo, `DashboardAssembler` treats a tee snapshot for the live account as
   unattributed ("pre-switch windows") when its `resets_at` values equal the outgoing account's last
@@ -630,10 +722,10 @@ improvement over a baseline; it is checked by wall clock in the Phase 2 acceptan
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
 | A switch races a session's own token refresh: sampling the lock leaves a window in which a session acquires `.oauth_refresh.lock`, refreshes, and writes the outgoing account's rotated pair over the just-unparked one | Low per switch, certain over months | High (two holders, sessions logged out) | The tool acquires the CLI's own `.oauth_refresh.lock` directory (exclusive mkdir, 60 s stale steal) and holds it across the move; a contending session gets the CLI's retryable error, never a logout; D2 closed from the binary |
-| The tool's state-file patch interleaves with the CLI's own `oauthAccount` rewrite | Medium if the patch is kept | Medium (lost unrelated key, transient wrong identity) | Phase 1.5a probes whether the patch is needed at all; if kept it runs under the acquired lock right after the move |
-| Claude Code rewrites `~/.claude.json` between the tool's read and replace, losing an unrelated key | Low | Medium | Read-modify-write inside milliseconds; `File.Replace` retry on sharing violation; the CLI already has this race between its own sessions; state file is not the credential store |
+| The tool's state-file patch interleaves with the CLI's own `oauthAccount` rewrite | Medium | Medium (lost unrelated key, transient wrong identity) | Settled by probe 1.5a (2026-09-06): the CLI never re-stamps on an ordinary request, so the patch is unconditional and runs under the acquired lock right after the move |
+| Claude Code rewrites `~/.claude.json` between the tool's read and replace, losing an unrelated key | Low | Medium | The patched bytes are staged in a flushed temp file, the state file is re-read and compared byte for byte (a length-and-mtime stamp misses same-length rewrites inside one tick), then renamed into place; only the rename is unguarded; five attempts, then the journal completes it at the next start |
 | Cross-volume profiles root would make the move a copy-then-delete | Low (default is same volume) | High (two holders) | Configuration refuses a profiles root on another volume, naming both paths; no copy path exists in the code |
-| A running session writes a stale in-memory `oauthAccount` back to the state file after a switch, so identity and billing disagree | Unknown (not seen across three hours of live sessions after spike 04; not probed deliberately) | Medium | Every dashboard read compares the state-file account with the live fingerprint's known owner and re-patches; Phase 1 acceptance probes it explicitly |
+| A running session writes a stale in-memory `oauthAccount` back to the state file after a switch, so identity and billing disagree | High (observed 2026-09-06 eight minutes after a switch, after an eight-hour window earlier that day had shown none) | Medium | The owner record binds the live pair to its account: re-bound when the CLI rotates the token while the state file still names the owner, released when the CLI stamped a later login, kept when the state file carries a block older than the record. A stale block is repaired at once: a watcher on the state file (edge-triggered, debounced, one pass at startup) and every dashboard read patch the owner's block back in from its profile folder, and the planner refuses until they agree |
 | A token refresh succeeds server-side but the write-back fails, discarding the only valid pair | Low | High (account needs a browser login) | Jittered retry, then an owner-only recovery file and a blocking card error; restored at next start |
 | Two credential mutations overlap (switch during Refresh all, two clicks, a second instance) | Medium without a gate | High (two holders, sessions logged out) | One in-process mutation gate, an instance lock, compare-and-swap write-back, and a switch journal reconciled at startup |
 | Usage bucket is per client, not per token (D1), so ten accounts hit 429 together | Medium | Medium | One-second spacing, budget of 6 per account, honor `Retry-After`, cards show lockouts; spike 02b once two pairs are parked |
@@ -765,7 +857,8 @@ what you found, what the brief expected, and the exact state of your work
 - Whether `claude auth logout` under a profile folder revokes server-side (research unknown 6); the
   optional logout on Remove is offered either way.
 - Whether a running session ever writes a stale `oauthAccount` back to the state file after a
-  switch (Phase 1 acceptance probe; the dashboard re-patch guard covers it either way).
+  switch (answered 2026-09-06: not seen over eight hours; the owner record's stale-block refusal
+  is the guard if it ever happens, since the dashboard does not re-patch).
 - Whether `login_hint` is honored on the interactive `/login` URL (only matters under mechanism b).
 
 ## Handoff to implementation

@@ -1,0 +1,106 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f6f5f2;
+  --card: #ffffff;
+  --ink: #1d1c1a;
+  --muted: #6b6963;
+  --line: #dcd9d2;
+  --live: #1f7a4d;
+  --warn: #b3661a;
+  --error: #b02a2a;
+  --accent: #2b5fd9;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #171614;
+    --card: #232220;
+    --ink: #ecebe6;
+    --muted: #a19e96;
+    --line: #3a3835;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 2rem clamp(1rem, 4vw, 3rem);
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+header h1 { margin: 0; font-size: 1.6rem; letter-spacing: 0.01em; }
+.tagline { margin: 0.25rem 0 0; color: var(--muted); }
+.muted { color: var(--muted); font-size: 0.85rem; }
+
+.banner {
+  margin: 1.25rem 0;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--warn);
+  border-left-width: 6px;
+  background: color-mix(in srgb, var(--warn) 12%, var(--card));
+  border-radius: 6px;
+}
+
+.warnings { margin: 0.75rem 0; padding-left: 1.25rem; color: var(--warn); }
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 1rem 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.card.live { border-color: var(--live); box-shadow: 0 0 0 2px color-mix(in srgb, var(--live) 30%, transparent); }
+.card h2 { margin: 0; font-size: 1.05rem; word-break: break-all; }
+
+.badges { display: flex; gap: 0.4rem; min-height: 1.4rem; }
+.badge {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+}
+.badge.live { color: var(--live); }
+.badge.needs-login { color: var(--warn); }
+
+button.switch {
+  align-self: flex-start;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+button.switch:disabled { opacity: 0.45; cursor: default; }
+
+.toast {
+  position: fixed;
+  right: 1.5rem;
+  bottom: 1.5rem;
+  max-width: 28rem;
+  padding: 0.85rem 1rem;
+  border-radius: 8px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+}
+.toast.ok { border-color: var(--live); }
+.toast.warn { border-color: var(--warn); }
+.toast.error { border-color: var(--error); }
