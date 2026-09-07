@@ -6,7 +6,9 @@ namespace ClaudeCodeAccountRotation.Core.Ports;
 /// Renews one parked pair's access token, which also rotates its refresh token
 /// and renews the login's own four-week lifetime. The implementation returns
 /// the rotated tokens to the caller and writes nothing: only
-/// <see cref="ICredentialPairStore"/> touches a credential file.
+/// <see cref="ICredentialPairStore"/> touches a credential file. The caller owns
+/// the audit line for a rotation, recording the refresh token's fingerprint and
+/// never the token itself.
 /// </summary>
 public interface ITokenRefreshClient
 {

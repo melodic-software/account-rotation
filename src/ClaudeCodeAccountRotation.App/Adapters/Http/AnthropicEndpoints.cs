@@ -66,6 +66,9 @@ internal static class AnthropicEndpoints
     /// The longest wait a <c>Retry-After</c> can impose. Spike 02 measured the
     /// real lockout at 300 seconds; the header is a value the tool does not
     /// control, and one absurd number should not park an account for a year.
+    /// ponytail: one hour covers every lockout observed so far. If the endpoint
+    /// ever answers a 429 keyed to the five-hour or weekly window, raise this
+    /// rather than let the tool retry into a wall it was told about.
     /// </summary>
     public static readonly TimeSpan MaximumRetryAfter = TimeSpan.FromHours(1);
 

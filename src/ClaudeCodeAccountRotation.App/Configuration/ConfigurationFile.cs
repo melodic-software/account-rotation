@@ -55,7 +55,6 @@ internal static class ConfigurationFile
         ["stateFilePath"] = configuration.StateFilePath,
         ["profilesRoot"] = configuration.ProfilesRoot,
         ["appDataDirectory"] = configuration.AppDataDirectory,
-        ["statuslineTeePath"] = configuration.StatuslineTeePath,
         ["listenPort"] = configuration.ListenPort,
         ["refreshLockWaitSeconds"] = configuration.RefreshLockWaitBound.TotalSeconds,
         ["claudeExecutable"] = configuration.ClaudeExecutable,
@@ -70,9 +69,10 @@ internal static class ConfigurationFile
             Text(raw, "stateFilePath") ?? defaults.StateFilePath,
             Text(raw, "profilesRoot") ?? defaults.ProfilesRoot,
             Text(raw, "appDataDirectory") ?? defaults.AppDataDirectory,
-            // The tee lives inside the live directory, so a file that moves the live
-            // directory moves the tee with it unless it names one of its own.
-            Text(raw, "statuslineTeePath") ?? ConfigurationDefaults.TeePathFor(liveConfigDirectory),
+            // Always derived: the tee lives inside the live directory, so a file that
+            // moves the live directory moves the tee with it. No knob until a layout
+            // exists that needs one.
+            ConfigurationDefaults.TeePathFor(liveConfigDirectory),
             Number(raw, "listenPort") is double port ? (int)port : defaults.ListenPort,
             Number(raw, "refreshLockWaitSeconds") is double seconds ? TimeSpan.FromSeconds(seconds) : defaults.RefreshLockWaitBound,
             Text(raw, "claudeExecutable") ?? defaults.ClaudeExecutable,

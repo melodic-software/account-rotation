@@ -21,8 +21,8 @@ All notable changes to this project are documented in this file. The format foll
   code changes when Anthropic adds or renames one.
 - Live-session quota from the `rate-limit-guard` tee file, the free tier of the refresh contract. A
   card shows a snapshot only when the snapshot names that card's account, so the outgoing account's
-  windows are never read as the incoming account's after a switch. The tee path is a new
-  `statuslineTeePath` configuration key defaulting inside the live config directory.
+  windows are never read as the incoming account's after a switch. The tee path is derived from the
+  live config directory, so it follows wherever that is set.
 - A per-account refresh budget: six usage reads per five minutes with a sixty-second minimum gap and
   a lockout honored from the endpoint's own `Retry-After`, driven by an injectable clock.
 - The two outbound adapters, for the usage endpoint and the OAuth token endpoint, each sending an

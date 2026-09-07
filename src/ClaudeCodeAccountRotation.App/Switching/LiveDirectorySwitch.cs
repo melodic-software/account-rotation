@@ -396,10 +396,13 @@ internal sealed partial class LiveDirectorySwitch
     /// </summary>
     private static bool IsCredentialTemporary(string path)
     {
+        // ".<intended name>.<32 hex>.tmp" as AtomicBytesFile forms it. The caller
+        // filters on that shape already; the length check keeps this honest for
+        // anyone who calls it without doing so.
         string name = Path.GetFileName(path);
-        // ".<intended name>.<32 hex>.tmp" as AtomicBytesFile forms it.
-        string intended = name[1..^(32 + ".".Length + ".tmp".Length)];
-        return intended.EndsWith(FileSystemCredentialPairStore.FileName, StringComparison.OrdinalIgnoreCase);
+        const int SuffixLength = 32 + 1 + 4;
+        return name.Length > SuffixLength + 1
+            && name[1..^SuffixLength].EndsWith(FileSystemCredentialPairStore.FileName, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool OnOneVolume(string first, string second) =>

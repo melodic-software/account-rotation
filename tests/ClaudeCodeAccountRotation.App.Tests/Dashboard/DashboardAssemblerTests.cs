@@ -26,7 +26,6 @@ public sealed class DashboardAssemblerTests
 
         card.GetProperty("quota").GetProperty("fiveHourPercent").GetDouble().ShouldBe(69);
         card.GetProperty("quota").GetProperty("sevenDayPercent").GetDouble().ShouldBe(43);
-        card.GetProperty("quota").GetProperty("source").GetString().ShouldBe("snapshot");
         card.GetProperty("quota").GetProperty("capturedAt").GetDateTimeOffset()
             .ShouldBe(DateTimeOffset.Parse("2026-09-07T15:33:52Z", System.Globalization.CultureInfo.InvariantCulture));
         card.GetProperty("quotaNote").ValueKind.ShouldBe(JsonValueKind.Null);

@@ -19,11 +19,4 @@ public sealed record UsageSnapshot(
     DateTimeOffset CapturedAt,
     QuotaSource Source,
     IReadOnlyList<UsageLimit> Limits,
-    ExtraUsageState? ExtraUsage)
-{
-    public double? FiveHourPercent => Find(LimitKind.Session)?.Percent;
-
-    public DateTimeOffset? SevenDayResetsAt => Find(LimitKind.WeeklyAll)?.ResetsAt;
-
-    private UsageLimit? Find(LimitKind kind) => Limits?.FirstOrDefault(limit => limit.Kind == kind);
-}
+    ExtraUsageState? ExtraUsage);

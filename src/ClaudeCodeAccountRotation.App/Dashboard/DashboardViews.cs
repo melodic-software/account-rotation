@@ -21,17 +21,17 @@ internal sealed record AccountCardView(
     string? QuotaNote = null);
 
 /// <summary>
-/// The windows a live session observed, as the tee recorded them. Rendered as
-/// "as of &lt;time&gt; via snapshot"; a card only ever shows a snapshot that
-/// names its own account.
+/// The windows a live session observed, as the tee recorded them. A card only
+/// ever shows a snapshot that names its own account. The source is not a field
+/// because the tee is the only source there is until the on-demand refresh
+/// lands and gives it something to vary against.
 /// </summary>
 internal sealed record StatuslineQuotaView(
     double? FiveHourPercent,
     DateTimeOffset? FiveHourResetsAt,
     double? SevenDayPercent,
     DateTimeOffset? SevenDayResetsAt,
-    DateTimeOffset CapturedAt,
-    string Source = "snapshot");
+    DateTimeOffset CapturedAt);
 
 internal sealed record SwitchOutcomeView(
     string Now,

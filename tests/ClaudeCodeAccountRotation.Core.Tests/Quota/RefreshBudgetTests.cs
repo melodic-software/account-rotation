@@ -93,7 +93,7 @@ public sealed class RefreshBudgetTests
     }
 
     [Fact]
-    public void TheRetryAfterACredentialRefreshRidesTheOriginalReservation()
+    public void TheRetryAfterACredentialRefreshIsAllowedWithoutWaitingTheGap()
     {
         TestClock clock = new(DateTimeOffset.Parse("2026-09-07T12:00:00Z", System.Globalization.CultureInfo.InvariantCulture));
         RefreshBudget budget = new(clock);
