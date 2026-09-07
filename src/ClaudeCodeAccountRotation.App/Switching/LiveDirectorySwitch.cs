@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Identity;
@@ -23,6 +24,19 @@ internal sealed partial class LiveDirectorySwitch
     private const string QuarantineDirectoryName = "quarantine";
     private const string LiveOwnerFileName = "live-owner.json";
     private static readonly TimeSpan _secondaryLockGuardAge = TimeSpan.FromSeconds(60);
+
+    // AttributesToSkip is cleared because the default hides Hidden and System
+    // files, and every temporary this writer makes starts with a dot, which
+    // some tools mark hidden. IgnoreInaccessible on the deep walk so one
+    // unreadable nested directory costs itself rather than the whole leg; the
+    // SearchOption overloads would abort the enumeration instead.
+    private static readonly EnumerationOptions _shallowSweep = new() { AttributesToSkip = FileAttributes.None };
+    private static readonly EnumerationOptions _deepSweep = new()
+    {
+        AttributesToSkip = FileAttributes.None,
+        RecurseSubdirectories = true,
+        IgnoreInaccessible = true,
+    };
 
     private readonly ICredentialPairStore _pairs;
     private readonly ClaudeStateFile _stateFile;
@@ -143,13 +157,16 @@ internal sealed partial class LiveDirectorySwitch
     public async Task<ReconciliationReport> ReconcileAsync(CancellationToken cancellationToken)
     {
         using IDisposable permit = await _gate.AcquireAsync(_options.MutationGateTimeout, cancellationToken);
-        IReadOnlyList<string> quarantined = await QuarantineDuplicateLineagesAsync(cancellationToken);
+        (IReadOnlyList<string> sweptTemporaries, IReadOnlyList<string> stranded) = await SweepTemporariesAsync(cancellationToken);
+        IReadOnlyList<string> quarantined = [.. sweptTemporaries, .. await QuarantineDuplicateLineagesAsync(cancellationToken)];
         (string journalOutcome, bool journalBlocks) = await ReconcileJournalAsync(cancellationToken);
         bool quarantineBlocks = QuarantineHoldsFiles();
-        string? banner = quarantineBlocks
-            ? "A duplicate credential lineage was quarantined under " + _quarantineDirectory + "; delete or restore those files before switching."
-            : journalBlocks ? "An earlier switch could not be reconciled: " + journalOutcome : null;
-        return new ReconciliationReport(quarantined, journalOutcome, quarantineBlocks || journalBlocks, banner);
+        string? banner = stranded.Count > 0
+            ? "A credential pair was left in a temporary file that could not be moved to safety: " + string.Join(", ", stranded) + "; move or delete it before switching."
+            : quarantineBlocks
+                ? "A duplicate credential lineage was quarantined under " + _quarantineDirectory + "; delete or restore those files before switching."
+                : journalBlocks ? "An earlier switch could not be reconciled: " + journalOutcome : null;
+        return new ReconciliationReport(quarantined, journalOutcome, quarantineBlocks || journalBlocks || stranded.Count > 0, banner);
     }
 
     private async Task<Result<SwitchOutcome, SwitchRefusal>> SwitchUnderGateAsync(AccountEmail target, CancellationToken cancellationToken)
@@ -168,7 +185,23 @@ internal sealed partial class LiveDirectorySwitch
             ? await _pairs.ReadParkedAsync(targetProfile.FolderPath, cancellationToken)
             : null;
         ManagedLoginPolicy policy = await _policyReader.ReadAsync(cancellationToken);
-        bool journalOpen = await _journal.ReadOpenAsync(cancellationToken) is not null || QuarantineHoldsFiles();
+        // A credential temporary left in place is a refresh token no quarantine and
+        // no journal knows about, so neither of those guards sees it. Checked here
+        // rather than read from the startup report, because the crash that strands
+        // one can happen while the tool is running.
+        string? strandedTemporary = StrandedCredentialTemporary();
+        if (strandedTemporary is not null)
+        {
+            // Named in the log here, because the reconciliation banner is written
+            // once at startup and a temporary stranded since then would otherwise
+            // refuse every switch with nothing anywhere telling the operator which
+            // file to deal with.
+            LogStrandedTemporary(strandedTemporary);
+        }
+
+        bool journalOpen = await _journal.ReadOpenAsync(cancellationToken) is not null
+            || QuarantineHoldsFiles()
+            || strandedTemporary is not null;
         AccountEmail? liveOwner = await ReadLiveOwnerAsync(live, cancellationToken);
         DateTimeOffset now = _timeProvider.GetUtcNow();
 
@@ -258,6 +291,170 @@ internal sealed partial class LiveDirectorySwitch
             pair?.Fingerprint,
             _pairs.FreshLockFileName(_secondaryLockGuardAge));
     }
+
+    /// <summary>
+    /// Clears this writer's own temporary files, which a crash between the temp
+    /// write and the rename leaves behind. A temp that parses as a credential
+    /// pair is the dangerous one: it holds a refresh token that neither the
+    /// lineage scan nor the single-holder check would ever match, because both
+    /// look only for <c>.credentials.json</c>, and after a write-back it may
+    /// hold the only live token of its lineage. Those move to quarantine, where
+    /// the operator can see them and the lineage scan does not; any other
+    /// leftover temp is deleted. Nothing of this tool's can be in flight here:
+    /// the sweep runs at startup, under the mutation gate, and the instance lock
+    /// rules out a second copy of the tool.
+    /// </summary>
+    private async Task<(IReadOnlyList<string> Quarantined, IReadOnlyList<string> Stranded)> SweepTemporariesAsync(CancellationToken cancellationToken)
+    {
+        List<string> quarantined = [];
+        List<string> stranded = [];
+        // Each root is listed under its own guard inside TemporaryFiles, so one
+        // directory that refuses to be listed costs that directory and no other.
+        foreach (string path in TemporaryFiles())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                if (await SweepOneAsync(path, cancellationToken) is string destination)
+                {
+                    quarantined.Add(destination);
+                    continue;
+                }
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // Startup runs before anything else can work, so an unreadable or
+                // held temp reports itself rather than taking the app down with it.
+                LogStrandedTemporary(path);
+                stranded.Add(path);
+            }
+        }
+
+        return (quarantined, stranded);
+    }
+
+    /// <summary>
+    /// Deals with one temporary file: returns its quarantine path when it held a
+    /// credential pair, null when it was deleted as ordinary residue. Refuses,
+    /// by throwing, to move a pair anywhere it would have to be copied.
+    /// </summary>
+    private async Task<string?> SweepOneAsync(string path, CancellationToken cancellationToken)
+    {
+        if (!IsCredentialTemporary(path))
+        {
+            // The same sharing-violation retry every other file operation here uses:
+            // a scanner holding a temp for a moment must not fail a startup.
+            await AtomicBytesFile.DeleteWithRetryAsync(path, cancellationToken);
+            return null;
+        }
+
+        string stamp = _timeProvider.GetUtcNow().ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture);
+        string destinationDirectory = Path.Combine(_quarantineDirectory, stamp + "-temp-" + Path.GetFileName(Path.GetDirectoryName(path)!));
+        string destination = Path.Combine(destinationDirectory, Path.GetFileName(path));
+        if (File.Exists(destination) || !OnOneVolume(path, destination))
+        {
+            // Never a copy: a second holder of a refresh token is the one thing this
+            // tool refuses to create, so the file stays where it is and the banner
+            // sends the operator to it.
+            throw new IOException("Refusing to move " + path + " to " + destination + ": a credential pair moves by rename or not at all.");
+        }
+
+        Directory.CreateDirectory(destinationDirectory);
+        await AtomicBytesFile.MoveIntoPlaceWithRetryAsync(path, destination, cancellationToken);
+        LogQuarantined(path, destination, "credential temporary");
+        return destination;
+    }
+
+    /// <summary>
+    /// This writer's temp names only: <c>.&lt;name&gt;.&lt;32 hex&gt;.tmp</c>, as
+    /// <see cref="AtomicBytesFile"/> forms them. The CLI's own in-flight temps do
+    /// not match that shape and are never touched.
+    /// </summary>
+    private IEnumerable<string> TemporaryFiles()
+    {
+        List<string> roots = [_options.LiveConfigDirectory, .. ProfileFolders()];
+        foreach (string root in roots.Where(Directory.Exists))
+        {
+            foreach (string path in ListTemporaries(root, _shallowSweep))
+            {
+                yield return path;
+            }
+        }
+
+        if (Directory.Exists(_options.AppDataDirectory))
+        {
+            // App data holds the journal, the owner record, the snapshot cache, and
+            // the recovery files, in nested directories, so this leg goes deep. The
+            // quarantine itself is skipped: its contents are already at rest.
+            foreach (string path in ListTemporaries(_options.AppDataDirectory, _deepSweep)
+                .Where(path => !path.StartsWith(_quarantineDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)))
+            {
+                yield return path;
+            }
+        }
+    }
+
+    /// <summary>
+    /// One root's temporaries, materialized under its own guard. Listing is lazy,
+    /// so an unlistable directory would otherwise throw from a <c>foreach</c>
+    /// header far away. Per root rather than per sweep on purpose: a permission
+    /// on one profile folder must not silently cost the live directory its sweep
+    /// and let a switch proceed over a stranded credential temporary.
+    /// </summary>
+    private IReadOnlyList<string> ListTemporaries(string root, EnumerationOptions options)
+    {
+        try
+        {
+            return [.. Directory.EnumerateFiles(root, ".*.tmp", options).Where(IsOwnTemporary)];
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            LogSweepIncomplete(root, exception.Message);
+            return [];
+        }
+    }
+
+    private IReadOnlyList<string> ProfileFolders()
+    {
+        try
+        {
+            return Directory.Exists(_options.ProfilesRoot) ? [.. Directory.EnumerateDirectories(_options.ProfilesRoot)] : [];
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            LogSweepIncomplete(_options.ProfilesRoot, exception.Message);
+            return [];
+        }
+    }
+
+    private static bool IsOwnTemporary(string path) => OwnTemporaryName().IsMatch(Path.GetFileName(path));
+
+    [GeneratedRegex(@"^\..+\.[0-9a-f]{32}\.tmp$", RegexOptions.CultureInvariant)]
+    private static partial Regex OwnTemporaryName();
+
+    /// <summary>
+    /// Whether a temporary file was being written as a credential pair, decided
+    /// by the name it was going to take, never by parsing what is in it. A crash
+    /// can stop the write anywhere: a truncated temp holds bytes that are not
+    /// valid JSON and can still be the only copy of a rotated refresh token, so
+    /// parsing would delete exactly the file worth keeping.
+    /// </summary>
+    private static bool IsCredentialTemporary(string path)
+    {
+        // ".<intended name>.<32 hex>.tmp" as AtomicBytesFile forms it. The caller
+        // filters on that shape already; the length check keeps this honest for
+        // anyone who calls it without doing so.
+        string name = Path.GetFileName(path);
+        const int SuffixLength = 32 + 1 + 4;
+        return name.Length > SuffixLength + 1
+            && name[1..^SuffixLength].EndsWith(FileSystemCredentialPairStore.FileName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool OnOneVolume(string first, string second) =>
+        string.Equals(
+            Path.GetPathRoot(Path.GetFullPath(first)),
+            Path.GetPathRoot(Path.GetFullPath(second)),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
     private async Task<IReadOnlyList<string>> QuarantineDuplicateLineagesAsync(CancellationToken cancellationToken)
     {
@@ -391,6 +588,15 @@ internal sealed partial class LiveDirectorySwitch
         return ("the live pair matches neither side of the journaled switch to " + entry.Incoming.Value + "; resolve by hand under " + _options.AppDataDirectory, true);
     }
 
+    /// <summary>
+    /// The first credential-bearing temporary still sitting where a crashed write
+    /// left it, or null. The startup sweep moves these to quarantine; one that is
+    /// still here could not be moved, and it holds a refresh token that no
+    /// single-holder check matches, so no switch may run over it.
+    /// </summary>
+    private string? StrandedCredentialTemporary() =>
+        TemporaryFiles().FirstOrDefault(IsCredentialTemporary);
+
     private bool QuarantineHoldsFiles() =>
         Directory.Exists(_quarantineDirectory) && Directory.EnumerateFiles(_quarantineDirectory, "*", SearchOption.AllDirectories).Any();
 
@@ -501,6 +707,12 @@ internal sealed partial class LiveDirectorySwitch
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "quarantined a duplicate credential lineage {Fingerprint}: {Source} -> {Destination}")]
     private partial void LogQuarantined(string source, string destination, string fingerprint);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "a temporary file at {Source} holds a credential pair and could not be moved to quarantine; it stays where it is and switching is blocked")]
+    private partial void LogStrandedTemporary(string source);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "the stale-temporary sweep could not list {Root}, so that directory was skipped this start: {Detail}")]
+    private partial void LogSweepIncomplete(string root, string detail);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "journal reconciliation {Outcome} for {Incoming}")]
     private partial void LogReconciled(string outcome, string incoming);

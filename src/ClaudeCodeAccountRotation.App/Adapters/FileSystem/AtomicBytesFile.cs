@@ -1,4 +1,6 @@
+using System.Security.AccessControl;
 using System.Security.Cryptography;
+using System.Security.Principal;
 
 namespace ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 
@@ -61,18 +63,7 @@ internal static class AtomicBytesFile
 
     private static async Task WriteTemporaryFileAsync(string temporaryPath, ReadOnlyMemory<byte> content, CancellationToken cancellationToken)
     {
-        FileStreamOptions options = new()
-        {
-            Mode = FileMode.CreateNew,
-            Access = FileAccess.Write,
-            Share = FileShare.None,
-        };
-        if (!OperatingSystem.IsWindows())
-        {
-            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
-        }
-
-        FileStream stream = new(temporaryPath, options);
+        FileStream stream = CreateOwnerOnly(temporaryPath);
         await using (stream)
         {
             await stream.WriteAsync(content, cancellationToken);
@@ -83,6 +74,51 @@ internal static class AtomicBytesFile
             stream.Flush(flushToDisk: true);
 #pragma warning restore CA1849
         }
+    }
+
+    /// <summary>
+    /// Creates the file readable and writable by this user alone. These files
+    /// hold credential pairs and the recovery copy of a rotated one, and a
+    /// temp inherits the parent directory's permissions unless it is told
+    /// otherwise. A rename carries the permissions with the file, so a target
+    /// this writer creates is owner-only too; Win32 <c>ReplaceFile</c>, which
+    /// the Windows path uses when the target already exists, deliberately
+    /// preserves the replaced file's own DACL, so a file another program
+    /// created keeps the permissions that program gave it.
+    /// </summary>
+    private static FileStream CreateOwnerOnly(string path)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return CreateOwnerOnlyOnWindows(path);
+        }
+
+        return new FileStream(path, new FileStreamOptions
+        {
+            Mode = FileMode.CreateNew,
+            Access = FileAccess.Write,
+            Share = FileShare.None,
+            UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite,
+        });
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static FileStream CreateOwnerOnlyOnWindows(string path)
+    {
+        // Inheritance off and one allow rule for this user: no Users, no
+        // Authenticated Users, whatever the parent directory grants.
+        SecurityIdentifier user = WindowsIdentity.GetCurrent().User
+            ?? throw new InvalidOperationException("The current Windows identity has no user SID, so an owner-only file cannot be created.");
+        FileSecurity security = new();
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        security.AddAccessRule(new FileSystemAccessRule(user, FileSystemRights.FullControl, AccessControlType.Allow));
+        return new FileInfo(path).Create(
+            FileMode.CreateNew,
+            FileSystemRights.Write | FileSystemRights.Synchronize,
+            FileShare.None,
+            bufferSize: 4096,
+            FileOptions.None,
+            security);
     }
 
     /// <summary>

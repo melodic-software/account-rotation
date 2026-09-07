@@ -9,4 +9,9 @@
     <ProjectReference Include="../../src/ClaudeCodeAccountRotation.Core/ClaudeCodeAccountRotation.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Recorded endpoint responses the parser tests read from the output directory. -->
+    <Content Include="Fixtures\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

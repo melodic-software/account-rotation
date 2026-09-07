@@ -33,6 +33,10 @@ public sealed class LiveDirectorySwitchTests : IDisposable
 
     private static JsonObject AccountJson(string email) => new() { ["accountUuid"] = "uuid-" + email, ["emailAddress"] = email };
 
+    /// <summary>A temporary file name in the shape <c>AtomicBytesFile</c> forms it.</summary>
+    private static string TemporaryName(string intendedFileName) =>
+        "." + intendedFileName + "." + Guid.NewGuid().ToString("N") + ".tmp";
+
     private async Task WriteStateFileAsync(string email, int startups = 7)
     {
         JsonObject state = new() { ["numStartups"] = startups, ["oauthAccount"] = AccountJson(email), ["trailing"] = "kept" };
@@ -165,6 +169,213 @@ public sealed class LiveDirectorySwitchTests : IDisposable
         Directory.Delete(Path.Combine(_appData, "quarantine"), recursive: true);
         _cli.Email = "b@example.com";
         (await Switch().SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken)).IsSuccess.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task StartupQuarantinesACredentialPairLeftInATemporaryFile()
+    {
+        // What a crash between this writer's temp write and its rename leaves: a
+        // refresh token in a file neither the lineage scan nor the single-holder
+        // check would ever match, because both look only for .credentials.json.
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        string folder = await ParkedProfileAsync("b@example.com", "refresh-b");
+        string stranded = Path.Combine(folder, TemporaryName(CredentialFiles.FileName));
+        await File.WriteAllTextAsync(stranded, CredentialFiles.Shape("refresh-rotated").ToJsonString(), TestContext.Current.CancellationToken);
+
+        ReconciliationReport report = await Switch().ReconcileAsync(TestContext.Current.CancellationToken);
+
+        File.Exists(stranded).ShouldBeFalse();
+        string quarantined = report.Quarantined.ShouldHaveSingleItem();
+        quarantined.ShouldContain("-temp-b@example.com");
+        (await CredentialFiles.FingerprintAsync(Path.GetDirectoryName(quarantined)!, TestContext.Current.CancellationToken)).ShouldBeNull();
+        JsonNode.Parse(await File.ReadAllTextAsync(quarantined, TestContext.Current.CancellationToken))!["claudeAiOauth"]!["refreshToken"]!
+            .GetValue<string>().ShouldBe("refresh-rotated");
+        report.SwitchingBlocked.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task ASwitchRefusesWhileACredentialTemporaryIsStrandedInPlace()
+    {
+        // A temporary that could not be moved to quarantine holds a refresh token
+        // that neither the journal nor the quarantine knows about, so neither of
+        // the switch's other guards sees it.
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        await ParkedProfileAsync("b@example.com", "refresh-b");
+        _cli.Email = "b@example.com";
+        string stranded = Path.Combine(_liveDirectory, TemporaryName(CredentialFiles.FileName));
+        await File.WriteAllTextAsync(stranded, CredentialFiles.Shape("refresh-rotated").ToJsonString(), TestContext.Current.CancellationToken);
+
+        Result<SwitchOutcome, SwitchRefusal> blocked = await Switch().SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken);
+
+        blocked.Error.ShouldBe(SwitchRefusal.LiveIdentityUnverified);
+        (await CredentialFiles.FingerprintAsync(_liveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
+
+        // Cleared by hand, as the banner tells the operator to: the switch runs.
+        File.Delete(stranded);
+        (await Switch().SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken)).IsSuccess.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task ANonCredentialTemporaryDoesNotBlockASwitch()
+    {
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        await ParkedProfileAsync("b@example.com", "refresh-b");
+        _cli.Email = "b@example.com";
+        await File.WriteAllTextAsync(
+            Path.Combine(_liveDirectory, TemporaryName(".claude.json")),
+            """{"numStartups":3}""",
+            TestContext.Current.CancellationToken);
+
+        (await Switch().SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken)).IsSuccess.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task StartupQuarantinesACredentialTemporaryThatIsTruncated()
+    {
+        // Power loss between the write and the flush leaves bytes that are not
+        // valid JSON, and those bytes can still be the only copy of a rotated
+        // refresh token. The name says what was being written; the contents do not.
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        string folder = await ParkedProfileAsync("b@example.com", "refresh-b");
+        string truncated = Path.Combine(folder, TemporaryName(CredentialFiles.FileName));
+        await File.WriteAllTextAsync(truncated, """{"claudeAiOauth":{"accessToken":"acc","refreshTok""", TestContext.Current.CancellationToken);
+
+        ReconciliationReport report = await Switch().ReconcileAsync(TestContext.Current.CancellationToken);
+
+        File.Exists(truncated).ShouldBeFalse();
+        string quarantined = report.Quarantined.ShouldHaveSingleItem();
+        (await File.ReadAllTextAsync(quarantined, TestContext.Current.CancellationToken)).ShouldContain("refreshTok");
+        report.SwitchingBlocked.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task ADirectoryThatCannotBeListedCostsOnlyItself()
+    {
+        // The sweep enumerates lazily, so an unlistable directory used to throw
+        // from the foreach header, past every guard, and take the host's start
+        // with it. Guarding the whole sweep instead would be worse than the crash:
+        // one unreadable profile folder would silently skip the live directory
+        // too, and a switch would proceed over a stranded credential temporary.
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        string stranded = Path.Combine(_liveDirectory, TemporaryName(CredentialFiles.FileName));
+        await File.WriteAllTextAsync(stranded, CredentialFiles.Shape("refresh-rotated").ToJsonString(), TestContext.Current.CancellationToken);
+        string unlistable = Path.Combine(_profilesRoot, "b@example.com");
+        Directory.CreateDirectory(unlistable);
+        DenyListing(unlistable);
+        try
+        {
+            // Pinned: without a real throw here the rest of this test asserts nothing.
+            Should.Throw<UnauthorizedAccessException>(() => Directory.EnumerateFiles(unlistable, "*").ToList());
+
+            ReconciliationReport report = await Switch().ReconcileAsync(TestContext.Current.CancellationToken);
+
+            report.JournalOutcome.ShouldBe("no open journal");
+            // The live directory was still swept despite the unreadable profile folder.
+            File.Exists(stranded).ShouldBeFalse();
+            report.Quarantined.ShouldHaveSingleItem().ShouldContain("-temp-live");
+            report.SwitchingBlocked.ShouldBeTrue();
+        }
+        finally
+        {
+            // Before Dispose deletes the tree, or the cleanup fails too.
+            AllowListing(unlistable);
+        }
+    }
+
+    private static void DenyListing(string directory)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            DenyListingOnWindows(directory);
+        }
+        else
+        {
+            File.SetUnixFileMode(directory, UnixFileMode.None);
+        }
+    }
+
+    private static void AllowListing(string directory)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            AllowListingOnWindows(directory);
+        }
+        else
+        {
+            File.SetUnixFileMode(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static void DenyListingOnWindows(string directory)
+    {
+        DirectoryInfo info = new(directory);
+        System.Security.AccessControl.DirectorySecurity security = info.GetAccessControl();
+        security.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(
+            System.Security.Principal.WindowsIdentity.GetCurrent().User!,
+            System.Security.AccessControl.FileSystemRights.ListDirectory,
+            System.Security.AccessControl.AccessControlType.Deny));
+        info.SetAccessControl(security);
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static void AllowListingOnWindows(string directory)
+    {
+        DirectoryInfo info = new(directory);
+        System.Security.AccessControl.DirectorySecurity security = info.GetAccessControl();
+        security.RemoveAccessRuleAll(new System.Security.AccessControl.FileSystemAccessRule(
+            System.Security.Principal.WindowsIdentity.GetCurrent().User!,
+            System.Security.AccessControl.FileSystemRights.ListDirectory,
+            System.Security.AccessControl.AccessControlType.Deny));
+        info.SetAccessControl(security);
+    }
+
+    [Fact]
+    public async Task StartupDeletesATemporaryFileThatHoldsNoCredentialPair()
+    {
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        string residue = Path.Combine(_liveDirectory, TemporaryName(".claude.json"));
+        await File.WriteAllTextAsync(residue, """{"numStartups":3}""", TestContext.Current.CancellationToken);
+        // Not this writer's name shape, so it is another program's file and is left alone.
+        string foreign = Path.Combine(_liveDirectory, "something.tmp");
+        await File.WriteAllTextAsync(foreign, "not ours", TestContext.Current.CancellationToken);
+
+        ReconciliationReport report = await Switch().ReconcileAsync(TestContext.Current.CancellationToken);
+
+        File.Exists(residue).ShouldBeFalse();
+        File.Exists(foreign).ShouldBeTrue();
+        report.Quarantined.ShouldBeEmpty();
+        report.SwitchingBlocked.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task TheSweepReachesTheLiveDirectoryTheProfilesAndAppData()
+    {
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        string folder = await ParkedProfileAsync("b@example.com", "refresh-b");
+        Directory.CreateDirectory(Path.Combine(_appData, "recovery"));
+        string[] stranded =
+        [
+            Path.Combine(_liveDirectory, TemporaryName(CredentialFiles.FileName)),
+            Path.Combine(folder, TemporaryName(CredentialFiles.FileName)),
+            Path.Combine(_appData, "recovery", TemporaryName("b.credentials.json")),
+        ];
+        foreach ((string path, int index) in stranded.Select(static (path, index) => (path, index)))
+        {
+            await File.WriteAllTextAsync(path, CredentialFiles.Shape("rotated-" + index.ToString(System.Globalization.CultureInfo.InvariantCulture)).ToJsonString(), TestContext.Current.CancellationToken);
+        }
+
+        ReconciliationReport report = await Switch().ReconcileAsync(TestContext.Current.CancellationToken);
+
+        report.Quarantined.Count.ShouldBe(3);
+        stranded.ShouldAllBe(path => !File.Exists(path));
     }
 
     [Fact]

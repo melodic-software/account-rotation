@@ -1,5 +1,6 @@
 using System.Reflection;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
+using ClaudeCodeAccountRotation.App.Adapters.Http;
 using ClaudeCodeAccountRotation.App.Adapters.Process;
 using ClaudeCodeAccountRotation.App.Configuration;
 using ClaudeCodeAccountRotation.App.Dashboard;
@@ -82,6 +83,9 @@ internal static class AppComposition
         services.AddSingleton<ICredentialPairStore>(new FileSystemCredentialPairStore(configuration.LiveConfigDirectory, configuration.ProfilesRoot, TimeProvider.System));
         services.AddSingleton(new ClaudeStateFile(configuration.StateFilePath));
         services.AddSingleton(new ProfileFolderStore(configuration.ProfilesRoot));
+        services.AddSingleton(new RateLimitGuardTeeFileReader(configuration.StatuslineTeePath));
+
+        AddOutboundClients(services, AnthropicEndpoints.UserAgent(configuration.UserAgentProductToken, Version));
         services.AddSingleton(new SwitchJournal(configuration.AppDataDirectory));
         services.AddSingleton<CredentialMutationGate>();
         services.AddSingleton(ManagedLoginPolicyReader.ForCurrentMachine());
@@ -111,6 +115,24 @@ internal static class AppComposition
         app.MapGet("/", static () => Results.Content(EmbeddedPage.IndexHtml, "text/html; charset=utf-8"));
         DashboardEndpoints.Map(app);
         SwitchEndpoints.Map(app);
+    }
+
+    /// <summary>
+    /// The two outbound calls the tool ever makes, both on demand and never on a
+    /// timer, each through the factory so no captive HttpClient outlives DNS.
+    /// The factory's logging handler names every header at Trace and redacts
+    /// every value unless told otherwise, which is what keeps a bearer token out
+    /// of a log file. Naming headers to redact would *narrow* that default, so
+    /// this deliberately names none. Registered here rather than inline so a
+    /// test exercises the same wiring the app runs.
+    /// </summary>
+    internal static void AddOutboundClients(IServiceCollection services, string userAgent)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        services.AddHttpClient(nameof(AnthropicUsageEndpointClient))
+            .AddTypedClient<IUsageEndpointClient>(http => new AnthropicUsageEndpointClient(http, userAgent, TimeProvider.System));
+        services.AddHttpClient(nameof(ClaudeOAuthTokenRefreshClient))
+            .AddTypedClient<ITokenRefreshClient>(http => new ClaudeOAuthTokenRefreshClient(http, userAgent, TimeProvider.System));
     }
 
     private static IClaudeCliAuthStatus ResolveCli(ClaudeCodeAccountRotationConfiguration configuration)
