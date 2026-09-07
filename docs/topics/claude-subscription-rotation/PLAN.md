@@ -793,7 +793,8 @@ measurement before anything was applied.
 ### Dependency graph
 
 - 0 → 1 (repo and skeleton must exist). 1 → 2 (ports and file classes). 2 → 3 (snapshot types).
-  1 → 4 (folders, endpoints, page). 3 → 5 and 4 → 5 (release packages the whole). 6 depends on
+  1 → 4 (folders, endpoints, page); 4 consumes nothing from 2 or 3, so it can run before either.
+  3 → 5 and 4 → 5 (release packages the whole). 6 depends on
   nothing here; 2's tee reader parses `account.email` when present, so 6 may land before or after 2.
 - Integration-first: Phase 1 is the tracer bullet and its sanity check is the live two-session probe.
 
@@ -801,7 +802,11 @@ measurement before anything was applied.
 
 > Wave A (after Phase 0): **Phase 1 in the main session** and **Phase 6 as one sub-agent worker**
 > in a worktree of `claude-code-plugins` (file-disjoint: another repository; about 150 LOC of shell
-> and docs). Wave B (sequential in the main session): 2 → 3 → 4 → 5.
+> and docs). Wave B (sequential in the main session): **2-core (2.1 to 2.4, plus 6.6 and #10,
+> PR #15) → 4 → 2-remainder (2.0, 2.5, 2.6) together with 3 → 5**.
+> Reordered 2026-09-07 (approved by the operator): the session limit hit with only two of the ten
+> accounts present on this machine, so nothing could roll; Phase 4 (roster add and remove,
+> browser-assisted login) depends only on Phase 1 and moves ahead of the rest of 2 and of 3.
 > Cost note: one extra agent for Phase 6 versus fully sequential; everything else shares
 > `Program.cs`, the dashboard, and the page, so parallel work there would race.
 
@@ -877,8 +882,9 @@ what you found, what the brief expected, and the exact state of your work
 
 ### Execution shape ([EXEC-SHAPE] tagged)
 
-- [EXEC-SHAPE] Tracer-bullet ordering: switch first (Phase 1), quota second, ranking third, roster
-  and login fourth, packaging fifth; the tee PR runs in parallel as W6.
+- [EXEC-SHAPE] Tracer-bullet ordering: switch first (Phase 1), quota core second, roster and login
+  third (Phase 4), the quota remainder together with ranking fourth, packaging fifth; the tee PR
+  runs in parallel as W6.
 - [EXEC-SHAPE] Two source projects plus two test projects (design T1).
 - [EXEC-SHAPE] Sub-topic promotion declined although Phases 1 to 4 each exceed 300 LOC: one operator,
   one repository, sequential commits on one branch per phase; six PLAN.md files would fragment one
@@ -931,6 +937,7 @@ evidence captured this session; the last row is below the bar and is flagged for
 | Spike 02b before Phase 2; AC 4 re-scope routed to `/planning:plan review` if the bucket is shared | Phase 2.0 | Spike 02 left keying unknown; two tokens are available now |
 | Single-file self-contained, no AOT; `win-x64` asset only | Phase 5 | Brief Q22; org precedent keeps AOT off |
 | README posture names the GRAY usage endpoint, the `client_id`, and the loop-lane residual | Phase 5.3 | Research root index §1; spike 03; reader contract |
+| Wave B reordered so Phase 4 runs before the rest of Phase 2 and before Phase 3 (2026-09-07, approved by the operator) | Supersedes the phase order in the first row: Wave B becomes 2-core (2.1 to 2.4, plus 6.6 and #10, PR #15) → 4 → 2-remainder (2.0, 2.5, 2.6) with 3 → 5 | The session limit hit with only two of ten accounts on this machine, so nothing could roll; the dependency graph puts Phase 4 on Phase 1 alone |
 | **Below bar, flagged:** default port `48211`, lock wait 10 s, budget 6 per 5 min with a 60 s gap, login-session expiry 10 min, 7-day paused-refresh window, quarantine on duplicate | Configuration defaults and small policies | Judgment calls; any value can be changed at approval or in `config.json` |
 
 ### Mechanical work
