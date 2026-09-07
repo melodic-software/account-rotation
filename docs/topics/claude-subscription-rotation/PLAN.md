@@ -407,7 +407,7 @@ Behavioral reference: `spike-04-swap.py` (memory slice), guard for guard.
 - `SwitchEndpointTests`: `POST /api/accounts/{email}/switch` without `X-Claude-Code-Account-Rotation` → 403; with a cross-site `Origin` → 403; with a non-loopback `Host` → 400; with a fresh `.oauth_refresh.lock` directory in the temp live dir → 409 `RefreshLockPresent`; with a parked pair whose login expired → 409 `TargetLoginExpired`; two concurrent switch requests → one 200 and one 409.
 - Live acceptance on this desktop (human observes, recorded in `tests/acceptance/README.md` log): with **three** sessions open, click Switch; `/status` in all three shows the new email after one message; `claude auth status --json | jq -r .email` matches; `bash tests/acceptance/check-single-holder.sh <profiles-root> <live-dir>` prints `duplicates=0` and exits 0; a subagent fan-out started before the switch completes without error (AC 2); then run several turns in an old session and start and stop a fresh session, and `jq -r .oauthAccount.emailAddress <live-state-file>` still prints the incoming email (state-file drift probe); once per acceptance run, `bash tests/acceptance/check-live-identity.sh` makes a single honest-UA `GET /api/oauth/profile` with the live access token and prints the billed email, which must match.
 
-### Phase 2: Quota reads and parked-pair credential refresh [TODO]
+### Phase 2: Quota reads and parked-pair credential refresh [DOING]
 
 Review: security
 
@@ -430,9 +430,9 @@ time, plus login expiry (AC 4). Behavioral references: `spike-usage-probe.py`,
 - [ ] **2.2** `StatuslineSnapshot` + `RateLimitGuardTeeFileReader` (tolerates a missing file, torn
   JSON, missing `rate_limits`, and reads `account.email` when present).
 - [ ] **2.3** `RefreshBudget` (`TimeProvider`-driven sliding window: 6 reads per account per 5 min,
-  60-second minimum gap, lockout until `Retry-After`). A 401 response consumes no budget and does
-  not start the gap clock, so the single retry after a credential refresh rides the original
-  reservation.
+  60-second minimum gap, lockout until `Retry-After`). The first 401 on a reservation refunds it and
+  does not start the gap clock, so the single retry after a credential refresh rides the original
+  reservation; a second 401 on the same reservation is not refunded (PR #15 security review).
 - [ ] **2.4** Ports `IUsageEndpointClient`, `ITokenRefreshClient`; adapters
   `AnthropicUsageEndpointClient` and `ClaudeOAuthTokenRefreshClient` via `IHttpClientFactory` typed
   clients, 20-second timeout, `User-Agent: claude-code-account-rotation/<version> (+https://github.com/melodic-software/claude-code-account-rotation)`,
@@ -466,7 +466,7 @@ time, plus login expiry (AC 4). Behavioral references: `spike-usage-probe.py`,
 - `QuotaRefreshTests.WriteBackFailureParksTheRotatedPairInRecovery`: with the parked file made read-only after the token endpoint answers, the recovery file exists with the new fingerprint, the card reports a blocking error, and the next start restores the pair and deletes the recovery file.
 - `AtomicJsonFileTests.CreatesOwnerOnlyFilesOnUnix` (Linux CI leg): target mode `600`, no temp residue; `ReplacesAbsentTargetByMove` on both legs.
 - `QuotaRefreshTests.PausedPairNearLoginExpiryIsRefreshed`: a paused pair 5 days from login expiry gets one token POST; one 20 days out gets none.
-- Live acceptance (human): with ≥ 2 parked accounts, one idle > 8 h, click Refresh all; every card populated within 60 s (wall clock) with source and capture time; compare one card to that account's claude.ai Settings > Usage.
+- Live acceptance (human): with ≥ 2 parked accounts, one idle > 8 h, click Refresh all; every card populated within 60 s (wall clock) with source, capture time, and "login expires in N days"; compare one card to that account's claude.ai Settings > Usage.
 
 ### Phase 3: Ranking, queue, and switch proposals [TODO]
 
@@ -544,10 +544,10 @@ work item settles the login mechanism (design thread T8).
 **Sanity Check:**
 
 - `.work/claude-subscription-rotation/spike-05b-piped-login.md` exists and its first line matches `^# Spike 05b .* (PASS|FAIL)$`.
-- `dotnet test` exit 0; `RosterEndpointTests`: add → `Directory.Exists(<profiles>/<sanitized>)`; pause → absent from `/api/dashboard` queue, present in cards; remove → folder gone; remove on the live email → 409; adopt-live → roster contains the live email.
+- `dotnet test` exit 0; `RosterEndpointTests`: add → `Directory.Exists(<profiles>/<sanitized>)`; pause → `RosterFile` round-trips `Paused == true` and the card renders the paused state (exclusion from the ranked queue is asserted by Phase 3's `AccountRankingTests` `Paused` case, since the queue lands at 3.5); remove → folder gone; remove on the live email → 409; adopt-live → roster contains the live email.
 - `ChromiumFamilyBrowserLauncherTests`: recorded arguments equal `["--profile-directory=Profile 3", "<url>"]` for Chrome with profile `Profile 3`.
 - `grep -rln "UseShellExecute = true\|cmd.exe" src/ClaudeCodeAccountRotation.App/Adapters/` prints exactly one path, `src/ClaudeCodeAccountRotation.App/Adapters/Process/ClaudeExecutableLocator.cs` (the documented npm-shim exception); no other adapter shells out.
-- Live acceptance (human): Login for a parked account opens the roster's browser and profile with the email pre-filled; after completion `CLAUDE_CONFIG_DIR=<folder> claude auth status --json | jq -r .email` prints that email and the card shows "login expires in ~28 days".
+- Live acceptance (human): Login for a parked account opens the roster's browser and profile with the email pre-filled; after completion `CLAUDE_CONFIG_DIR=<folder> claude auth status --json | jq -r .email` prints that email and the card leaves "needs login" (the "login expires in N days" card text is 2.6 and is asserted in Phase 2's live acceptance).
 
 ### Phase 5: Packaging, portability, and release [TODO]
 
@@ -793,7 +793,8 @@ measurement before anything was applied.
 ### Dependency graph
 
 - 0 → 1 (repo and skeleton must exist). 1 → 2 (ports and file classes). 2 → 3 (snapshot types).
-  1 → 4 (folders, endpoints, page). 3 → 5 and 4 → 5 (release packages the whole). 6 depends on
+  1 → 4 (folders, endpoints, page); 4 consumes nothing from 2 or 3, so it can run before either.
+  3 → 5 and 4 → 5 (release packages the whole). 6 depends on
   nothing here; 2's tee reader parses `account.email` when present, so 6 may land before or after 2.
 - Integration-first: Phase 1 is the tracer bullet and its sanity check is the live two-session probe.
 
@@ -801,7 +802,11 @@ measurement before anything was applied.
 
 > Wave A (after Phase 0): **Phase 1 in the main session** and **Phase 6 as one sub-agent worker**
 > in a worktree of `claude-code-plugins` (file-disjoint: another repository; about 150 LOC of shell
-> and docs). Wave B (sequential in the main session): 2 → 3 → 4 → 5.
+> and docs). Wave B (sequential in the main session): **2-core (2.1 to 2.4, plus 6.6 and #10,
+> PR #15) → 4 → 2-remainder (2.0, 2.5, 2.6) together with 3 → 5**.
+> Reordered 2026-09-07 (approved by the operator): the session limit hit with only two of the ten
+> accounts present on this machine, so nothing could roll; Phase 4 (roster add and remove,
+> browser-assisted login) depends only on Phase 1 and moves ahead of the rest of 2 and of 3.
 > Cost note: one extra agent for Phase 6 versus fully sequential; everything else shares
 > `Program.cs`, the dashboard, and the page, so parallel work there would race.
 
@@ -877,8 +882,9 @@ what you found, what the brief expected, and the exact state of your work
 
 ### Execution shape ([EXEC-SHAPE] tagged)
 
-- [EXEC-SHAPE] Tracer-bullet ordering: switch first (Phase 1), quota second, ranking third, roster
-  and login fourth, packaging fifth; the tee PR runs in parallel as W6.
+- [EXEC-SHAPE] Tracer-bullet ordering: switch first (Phase 1), quota core second, roster and login
+  third (Phase 4), the quota remainder together with ranking fourth, packaging fifth; the tee PR
+  runs in parallel as W6.
 - [EXEC-SHAPE] Two source projects plus two test projects (design T1).
 - [EXEC-SHAPE] Sub-topic promotion declined although Phases 1 to 4 each exceed 300 LOC: one operator,
   one repository, sequential commits on one branch per phase; six PLAN.md files would fragment one
@@ -931,6 +937,7 @@ evidence captured this session; the last row is below the bar and is flagged for
 | Spike 02b before Phase 2; AC 4 re-scope routed to `/planning:plan review` if the bucket is shared | Phase 2.0 | Spike 02 left keying unknown; two tokens are available now |
 | Single-file self-contained, no AOT; `win-x64` asset only | Phase 5 | Brief Q22; org precedent keeps AOT off |
 | README posture names the GRAY usage endpoint, the `client_id`, and the loop-lane residual | Phase 5.3 | Research root index §1; spike 03; reader contract |
+| Wave B reordered so Phase 4 runs before the rest of Phase 2 and before Phase 3 (2026-09-07, approved by the operator) | Supersedes the phase order in the first row: Wave B becomes 2-core (2.1 to 2.4, plus 6.6 and #10, PR #15) → 4 → 2-remainder (2.0, 2.5, 2.6) with 3 → 5 | The session limit hit with only two of ten accounts on this machine, so nothing could roll; the dependency graph puts Phase 4 on Phase 1 alone |
 | **Below bar, flagged:** default port `48211`, lock wait 10 s, budget 6 per 5 min with a 60 s gap, login-session expiry 10 min, 7-day paused-refresh window, quarantine on duplicate | Configuration defaults and small policies | Judgment calls; any value can be changed at approval or in `config.json` |
 
 ### Mechanical work
