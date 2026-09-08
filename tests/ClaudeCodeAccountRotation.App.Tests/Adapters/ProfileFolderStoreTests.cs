@@ -117,6 +117,42 @@ public sealed class ProfileFolderStoreTests : IDisposable
         JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(folder, "profile.json"), TestContext.Current.CancellationToken))!["emailAddress"]!.GetValue<string>().ShouldBe("b@example.com");
     }
 
+    [Fact]
+    public async Task AdoptingAFreshLoginRewritesTheProfileBeforeItPrunes()
+    {
+        // A folder logged in once as one account and just logged in again as
+        // another: the stale profile is exactly what must not survive.
+        string folder = await FolderWithProfileAsync("c@example.com", "stale@example.com");
+        JsonObject stateFile = new() { ["numStartups"] = 1, ["oauthAccount"] = AccountJson("c@example.com") };
+        await File.WriteAllTextAsync(Path.Combine(folder, ".claude.json"), stateFile.ToJsonString(), TestContext.Current.CancellationToken);
+        await CredentialFiles.WriteAsync(folder, "refresh-c", TestContext.Current.CancellationToken);
+
+        bool adopted = await _store.AdoptFreshLoginAsync(folder, TestContext.Current.CancellationToken);
+
+        adopted.ShouldBeTrue();
+        JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(folder, "profile.json"), TestContext.Current.CancellationToken))!["emailAddress"]!
+            .GetValue<string>().ShouldBe("c@example.com");
+        // The state file is gone, so the rewrite can only have read it first.
+        Directory.GetFileSystemEntries(folder).Select(Path.GetFileName).Order(StringComparer.Ordinal)
+            .ShouldBe([".credentials.json", "profile.json"]);
+    }
+
+    [Fact]
+    public async Task AdoptingALoginThatNamesNoAccountWritesNothingAndPrunesNothing()
+    {
+        // Better a folder still holding its residue than one whose only copy of the
+        // identity was deleted on the way to writing nothing.
+        string folder = await FolderWithProfileAsync("d@example.com", "stale@example.com");
+        await File.WriteAllTextAsync(Path.Combine(folder, ".claude.json"), "{\"numStartups\":1}", TestContext.Current.CancellationToken);
+
+        bool adopted = await _store.AdoptFreshLoginAsync(folder, TestContext.Current.CancellationToken);
+
+        adopted.ShouldBeFalse();
+        File.Exists(Path.Combine(folder, ".claude.json")).ShouldBeTrue();
+        JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(folder, "profile.json"), TestContext.Current.CancellationToken))!["emailAddress"]!
+            .GetValue<string>().ShouldBe("stale@example.com");
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_profilesRoot))

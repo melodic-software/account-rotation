@@ -92,9 +92,24 @@ internal static class AppComposition
         services.AddSingleton(new SwitchJournal(configuration.AppDataDirectory));
         services.AddSingleton<CredentialMutationGate>();
         services.AddSingleton(ManagedLoginPolicyReader.ForCurrentMachine());
-        (IClaudeCliAuthStatus status, IClaudeCliLogout logout) = ResolveCli(configuration);
+        Result<ClaudeExecutable, string> cli = ClaudeExecutableLocator.Locate(
+            configuration.ClaudeExecutable,
+            Environment.GetEnvironmentVariable("PATH"),
+            OperatingSystem.IsWindows(),
+            Environment.SystemDirectory);
+        (IClaudeCliAuthStatus status, IClaudeCliLogout logout) = ResolveCli(cli);
         services.AddSingleton(status);
         services.AddSingleton(logout);
+        // The login child factory: a real process, or a start that reports why no
+        // CLI could be resolved rather than throwing at the first login.
+        LoginChildFactory loginChild = cli.IsSuccess
+            ? ProcessLoginChild.Factory(cli.Value)
+            : (_, _) => Result<ILoginChild, string>.Failure(cli.Error);
+        services.AddSingleton<ILoginSessionRunner>(provider => new ClaudeCliLoginSessionRunner(
+            loginChild,
+            provider.GetRequiredService<ProfileFolderStore>(),
+            provider.GetRequiredService<CredentialMutationGate>(),
+            provider.GetRequiredService<TimeProvider>()));
         services.AddSingleton<LiveDirectorySwitch>();
         services.AddSingleton<DashboardState>();
         services.AddSingleton<DashboardAssembler>();
@@ -121,6 +136,7 @@ internal static class AppComposition
         DashboardEndpoints.Map(app);
         SwitchEndpoints.Map(app);
         RosterEndpoints.Map(app);
+        LoginEndpoints.Map(app);
     }
 
     /// <summary>
@@ -142,13 +158,8 @@ internal static class AppComposition
     }
 
     /// <summary>The one CLI process adapter, offered under both of the ports it serves.</summary>
-    private static (IClaudeCliAuthStatus Status, IClaudeCliLogout Logout) ResolveCli(ClaudeCodeAccountRotationConfiguration configuration)
+    private static (IClaudeCliAuthStatus Status, IClaudeCliLogout Logout) ResolveCli(Result<ClaudeExecutable, string> located)
     {
-        Result<ClaudeExecutable, string> located = ClaudeExecutableLocator.Locate(
-            configuration.ClaudeExecutable,
-            Environment.GetEnvironmentVariable("PATH"),
-            OperatingSystem.IsWindows(),
-            Environment.SystemDirectory);
         if (located.IsFailure)
         {
             UnavailableClaudeCli unavailable = new(located.Error);

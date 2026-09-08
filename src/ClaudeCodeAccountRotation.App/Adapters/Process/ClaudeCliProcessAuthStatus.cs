@@ -44,34 +44,7 @@ internal sealed class ClaudeCliProcessAuthStatus : IClaudeCliAuthStatus, IClaude
     private async Task<Result<string, string>> RunAsync(string[] arguments, string? configDirectory, CancellationToken cancellationToken)
     {
         string command = "claude " + string.Join(' ', arguments);
-        ProcessStartInfo startInfo = new(_executable.FileName)
-        {
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true,
-        };
-        if (_executable.Shim is string shim)
-        {
-            // cmd.exe does not parse its command line by the argument-list rules, and an
-            // argument-list entry is quoted only when it holds a space or a quote, so a
-            // shim path carrying "&" would be read as a command separator. With /s the
-            // interpreter strips the outer quotes and runs the rest; the inner quotes keep
-            // the path one operand. A Windows path can never contain a quote itself.
-            startInfo.Arguments = "/d /s /c \"\"" + shim + "\" " + string.Join(' ', arguments) + "\"";
-        }
-        else
-        {
-            foreach (string argument in _executable.ArgumentPrefix.Concat(arguments))
-            {
-                startInfo.ArgumentList.Add(argument);
-            }
-        }
-
-        if (configDirectory is not null)
-        {
-            startInfo.Environment["CLAUDE_CONFIG_DIR"] = configDirectory;
-        }
+        ProcessStartInfo startInfo = _executable.StartInfo(arguments, configDirectory);
 
         using System.Diagnostics.Process process = new() { StartInfo = startInfo };
         try
@@ -94,12 +67,12 @@ internal sealed class ClaudeCliProcessAuthStatus : IClaudeCliAuthStatus, IClaude
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            TryKill(process);
+            ChildProcess.TryKill(process);
             return Result<string, string>.Failure(command + " timed out after " + _timeout.TotalSeconds.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture) + " s and was killed");
         }
         catch (OperationCanceledException)
         {
-            TryKill(process);
+            ChildProcess.TryKill(process);
             throw;
         }
 
@@ -133,20 +106,4 @@ internal sealed class ClaudeCliProcessAuthStatus : IClaudeCliAuthStatus, IClaude
 
     private static string? Text(JsonElement root, string propertyName) =>
         root.TryGetProperty(propertyName, out JsonElement value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
-
-    private static void TryKill(System.Diagnostics.Process process)
-    {
-        try
-        {
-            process.Kill(entireProcessTree: true);
-        }
-        catch (InvalidOperationException)
-        {
-            // Already exited.
-        }
-        catch (System.ComponentModel.Win32Exception)
-        {
-            // Could not be killed; nothing more to do here.
-        }
-    }
 }

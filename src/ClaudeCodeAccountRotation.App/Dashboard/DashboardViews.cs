@@ -56,6 +56,20 @@ internal sealed record SwitchOutcomeView(
 
 internal sealed record SwitchRefusalView(string Refusal, string Message);
 
+/// <summary>
+/// A login in flight, as the page sees it. The sign-in URL is an authorize URL
+/// and carries no token; the message comes from the runner's fixed vocabulary,
+/// so neither the one-time code nor the CLI's own output ever reaches here.
+/// </summary>
+internal sealed record LoginSessionView(
+    string Id,
+    string Email,
+    string State,
+    string? Message,
+    string? SignInUrl,
+    string? BrowserError,
+    DateTimeOffset ExpiresAt);
+
 /// <summary>Held across requests: the last reconciliation report for the banner.</summary>
 internal sealed class DashboardState
 {
