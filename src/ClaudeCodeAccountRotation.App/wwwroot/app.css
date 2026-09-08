@@ -98,7 +98,9 @@ button.secondary { background: transparent; color: var(--accent); }
 button.danger { background: transparent; border-color: var(--error); color: var(--error); }
 
 .roster-add { margin-top: 1.5rem; }
-.roster-add > summary, .card details.edit > summary { cursor: pointer; color: var(--muted); }
+.roster-add > summary, .card details.edit > summary, .card details.login > summary { cursor: pointer; color: var(--muted); }
+.card details.login { margin-top: 0.75rem; }
+.card details.login a { color: var(--accent); }
 
 .roster-form {
   display: flex;

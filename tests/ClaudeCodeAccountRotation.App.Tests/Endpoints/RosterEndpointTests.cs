@@ -261,7 +261,7 @@ public sealed class RosterEndpointTests
     }
 
     [Fact]
-    public async Task ThePageDrivesEveryRosterOperationAndOffersNoLoginYet()
+    public async Task ThePageDrivesEveryRosterOperationAndTheLogin()
     {
         await using AppFactory factory = new();
         using HttpClient client = factory.CreateClient();
@@ -274,9 +274,19 @@ public sealed class RosterEndpointTests
         script.ShouldContain("adopt-live");
         script.ShouldContain("\"PATCH\"");
         script.ShouldContain("\"DELETE\"");
-        // The login mechanism waits on the spike that picks it; the page must not
-        // offer a login button or a login endpoint before that verdict exists.
-        script.ShouldNotContain("/login");
+        // The Login button, the panel that shows the sign-in URL, and the code field
+        // the operator pastes into. The URL-paste field belongs to the mechanism the
+        // spike did not select and is deliberately absent.
+        script.ShouldContain("\"/login\"");
+        script.ShouldContain("startLogin");
+        script.ShouldContain("signInUrl");
+        script.ShouldContain("/api/login-sessions/");
+        script.ShouldContain("paste the code here");
+        // The code goes in the body, never in a path.
+        script.ShouldContain("{ code: code }");
+        // The ten-second poll must leave a half-typed code alone, the way it already
+        // leaves an open Edit panel alone.
+        script.ShouldContain("details.edit[open], details.login[open]");
     }
 
     [Fact]

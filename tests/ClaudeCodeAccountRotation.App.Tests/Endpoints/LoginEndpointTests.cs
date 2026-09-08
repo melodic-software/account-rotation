@@ -175,7 +175,7 @@ public sealed class LoginEndpointTests
     }
 
     [Fact]
-    public async Task TheCodeReachesOnlyTheChildsInputAndNoArgumentResponseOrLogLine()
+    public async Task TheCodeReachesStandardInputAndNoArgumentResponseLogLineOrFile()
     {
         await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
         using HttpClient client = factory.CreateMutatingClient();

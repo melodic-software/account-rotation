@@ -12,6 +12,9 @@
   var addEmail = document.getElementById("add-email");
   var toastTimer = null;
   var busy = false;
+  // The card node per e-mail, rebuilt by each render, so a login panel can be
+  // hung on the right card without querying by an address that needs escaping.
+  var cardNodes = {};
 
   function showToast(text, kind) {
     toast.textContent = text;
@@ -141,6 +144,92 @@
     });
   }
 
+  // Login is not routed through mutate: mutate ends in a forced render, which
+  // rebuilds every card and would throw away the panel this just opened.
+  function startLogin(email) {
+    busy = true;
+    setButtonsDisabled(true);
+    return send(accountPath(email, "/login"), "POST", null)
+      .then(function (result) {
+        if (!result.ok) {
+          showToast(refused(result.body), "error");
+          return null;
+        }
+        openLoginPanel(email, result.body);
+        return null;
+      })
+      .catch(function (error) { showToast("Request failed: " + error, "error"); })
+      .then(function () { busy = false; setButtonsDisabled(false); });
+  }
+
+  function openLoginPanel(email, session) {
+    var card = cardNodes[email];
+    if (!card) { return; }
+
+    var panel = element("details", "login");
+    panel.open = true;
+    panel.appendChild(element("summary", null, "Signing " + email + " in"));
+
+    var link = element("a", null, "Open the sign-in page");
+    link.href = session.signInUrl;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    panel.appendChild(link);
+
+    if (session.browserError) {
+      panel.appendChild(element("p", "muted", "The mapped browser did not open: " + session.browserError + " Use the link above."));
+    }
+
+    var status = element("p", "muted", "Sign in, then paste the code that page shows. This login expires in ten minutes.");
+    panel.appendChild(status);
+
+    var form = element("form", "roster-form");
+    var code = element("input");
+    code.type = "text";
+    code.autocomplete = "off";
+    code.placeholder = "paste the code here";
+    var submit = element("button", null, "Submit code");
+    submit.type = "submit";
+    form.appendChild(code);
+    form.appendChild(submit);
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      submitCode(session.id, email, code, status, panel);
+    });
+    panel.appendChild(form);
+
+    card.appendChild(panel);
+    code.focus();
+  }
+
+  function submitCode(id, email, field, status, panel) {
+    var code = field.value.trim();
+    if (!code) { return Promise.resolve(); }
+    busy = true;
+    setButtonsDisabled(true);
+    status.textContent = "Checking that code...";
+    // The code travels in the body. It is never part of a path, and the reply
+    // never carries it back.
+    return send("/api/login-sessions/" + encodeURIComponent(id) + "/code", "POST", { code: code })
+      .then(function (result) {
+        field.value = "";
+        if (!result.ok) {
+          status.textContent = refused(result.body);
+          return null;
+        }
+        if (result.body.state !== "Completed") {
+          // A rejected code leaves the session open, so the field stays for another try.
+          status.textContent = result.body.message || "Still waiting on the sign-in page.";
+          return null;
+        }
+        panel.parentNode.removeChild(panel);
+        showToast(result.body.message || (email + " is logged in"), "ok");
+        return refresh(true);
+      })
+      .catch(function (error) { status.textContent = "Request failed: " + error; })
+      .then(function () { busy = false; setButtonsDisabled(false); });
+  }
+
   function editPanel(account) {
     var panel = element("details", "edit");
     panel.appendChild(element("summary", null, "Edit"));
@@ -169,9 +258,9 @@
 
   function render(dashboard, force) {
     // Rendering rebuilds every card, so the ten-second poll would otherwise wipe an
-    // Edit panel out from under whoever is typing in it. A mutation's own render
-    // passes force, since that one has to show the result.
-    if (!force && cards.querySelector("details.edit[open]")) { return; }
+    // Edit panel, or a half-typed login code, out from under whoever is typing it.
+    // A mutation's own render passes force, since that one has to show the result.
+    if (!force && cards.querySelector("details.edit[open], details.login[open]")) { return; }
     captured.textContent = "as of " + new Date(dashboard.capturedAt).toLocaleTimeString();
     banner.hidden = !dashboard.banner;
     banner.textContent = dashboard.banner || "";
@@ -180,6 +269,7 @@
     dashboard.warnings.forEach(function (warning) { warnings.appendChild(element("li", null, warning)); });
 
     cards.innerHTML = "";
+    cardNodes = {};
     dashboard.accounts.forEach(function (account) {
       var roster = account.roster;
       var paused = !!(roster && roster.paused);
@@ -210,12 +300,22 @@
         actions.appendChild(actionButton("Adopt", "secondary", function () { adopt(account.email); }));
       }
 
+      // The live account is signed in already; logging it into its parked folder
+      // would leave one account holding two logins.
+      if (roster && !account.isLive) {
+        actions.appendChild(actionButton(
+          account.hasCredentials ? "Log in again" : "Login",
+          "secondary",
+          function () { startLogin(account.email); }));
+      }
+
       if (!account.isLive) {
         actions.appendChild(actionButton("Remove", "danger", function () { remove(account.email); }));
       }
 
       card.appendChild(actions);
       if (roster) { card.appendChild(editPanel(account)); }
+      cardNodes[account.email] = card;
       cards.appendChild(card);
     });
   }

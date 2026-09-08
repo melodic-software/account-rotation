@@ -16,6 +16,18 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- Browser-assisted login, so a parked account is logged in from the page instead of from a hand-run
+  `/login` in a terminal. Login runs the unmodified CLI under that account's own folder as its
+  `CLAUDE_CONFIG_DIR`, captures the sign-in URL it prints, and opens that URL in the browser profile
+  the roster maps to the account, with the address already filled in. The operator pastes the
+  one-time code into the card; a rejected code is a retry inside the session's ten-minute expiry
+  rather than a dead session, and the child process is killed on expiry, on cancel, and at shutdown.
+  A login the browser could not be opened for still hands back the URL to open by hand.
+- Completing a login rewrites the folder's `profile.json` from the state file that login just wrote,
+  and only then prunes the residue, so a folder logged in a second time as a different account can
+  never keep the first account's name. The rewrite happens once the CLI has ended, not while it is
+  running, and a login whose state file names no account leaves the folder exactly as it is rather
+  than pruning away the only copy of its identity.
 - The account roster and its page controls: Add, Pause, Remove, and Adopt, so getting the other
   accounts onto a machine never means editing a file or reaching for curl. Add creates the profile
   folder and the card says "needs login"; Pause takes an account out of the ranked queue without
