@@ -8,7 +8,10 @@ public sealed class StateFileWatcherTests
 {
     private static async Task<string?> StateFileEmailAsync(string path, CancellationToken cancellationToken)
     {
-        var node = JsonNode.Parse(await File.ReadAllTextAsync(path, cancellationToken));
+        // The watcher replaces this file atomically while the test reads it, so the read goes
+        // through SharedFileReader like every other read of a file Claude Code also writes;
+        // File.ReadAllTextAsync opens with FileShare.Read and loses that race.
+        var node = JsonNode.Parse(await SharedFileReader.ReadAllBytesAsync(path, cancellationToken));
         return node?["oauthAccount"]?["emailAddress"]?.GetValue<string>();
     }
 
