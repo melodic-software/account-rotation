@@ -270,6 +270,10 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
             return;
         }
 
+        // The folder holds a pair, so the login worked whatever happens next. Every
+        // way the tidy-up can fail is caught here: a fault escaping would leave the
+        // session pending behind a killed child until its expiry, and the operator
+        // watching a completed login say "still waiting" for ten minutes.
         bool adopted;
         try
         {
@@ -277,6 +281,15 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
             adopted = await _profiles.AdoptFreshLoginAsync(session.Folder, CancellationToken.None);
         }
         catch (TimeoutException)
+        {
+            adopted = false;
+        }
+        catch (IOException)
+        {
+            // A file the CLI wrote seconds ago is still held by something else.
+            adopted = false;
+        }
+        catch (UnauthorizedAccessException)
         {
             adopted = false;
         }

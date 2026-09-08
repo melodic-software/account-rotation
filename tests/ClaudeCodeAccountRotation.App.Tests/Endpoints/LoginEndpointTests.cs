@@ -175,6 +175,45 @@ public sealed class LoginEndpointTests
     }
 
     [Fact]
+    public async Task AFolderThatCannotBeTidiedStillCompletesRatherThanHanging()
+    {
+        await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
+        List<FileStream> held = [];
+        factory.LoginChild.OnCode = async (child, code) =>
+        {
+            // The state file first, then the exclusive handle on it, and only then the
+            // pair and the exit that lets the runner finish: something else is holding
+            // that file open, the way a scanner holds one written a second ago. The
+            // pair is on disk, so the login worked, but the tidy-up cannot run, and
+            // that must never strand the operator.
+            JsonObject state = new() { ["numStartups"] = 1, ["oauthAccount"] = AppFactory.AccountJson(child.Email) };
+            string statePath = Path.Combine(child.ConfigDirectory, ".claude.json");
+            Directory.CreateDirectory(child.ConfigDirectory);
+            await File.WriteAllTextAsync(statePath, state.ToJsonString(), TestContext.Current.CancellationToken);
+            held.Add(new FileStream(statePath, FileMode.Open, FileAccess.Read, FileShare.None));
+            await CredentialFiles.WriteAsync(child.ConfigDirectory, "refresh-" + child.Email, TestContext.Current.CancellationToken);
+            child.Exit();
+        };
+        using HttpClient client = factory.CreateMutatingClient();
+        JsonObject started = await StartLoginAsync(client, TestContext.Current.CancellationToken);
+
+        JsonObject completed = await SubmitCodeAsync(client, started["id"]!.GetValue<string>(), Code, TestContext.Current.CancellationToken);
+
+        try
+        {
+            completed["state"]!.GetValue<string>().ShouldBe(nameof(LoginSessionState.Completed));
+            completed["message"]!.GetValue<string>().ShouldContain("left exactly as it is");
+        }
+        finally
+        {
+            foreach (FileStream stream in held)
+            {
+                await stream.DisposeAsync();
+            }
+        }
+    }
+
+    [Fact]
     public async Task TheCodeReachesStandardInputAndNoArgumentResponseLogLineOrFile()
     {
         await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
