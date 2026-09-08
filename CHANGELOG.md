@@ -16,6 +16,20 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- The browser profiles this machine already has are discovered rather than typed. Each
+  Chromium-family browser publishes its own profiles in its `Local State` file: the profile
+  directory, the name the browser shows for it, and usually the address signed into it. A new port
+  and adapter read that for Chrome, Edge and Brave, `GET /api/browser-profiles` returns it, and the
+  roster's browser-profile field is a grouped select instead of a free-text box asking for a
+  directory name nobody knows. Typing an account's e-mail into the Add form pre-selects the profile
+  already signed into that address, and its browser with it, which is the mapping for almost every
+  account an operator adds; the selection stays overridable, and a profile the enumeration missed
+  is still typeable. Each option names the display name, the signed-in address, and the directory,
+  because the first two are what the operator recognizes and only the last one starts a browser:
+  Edge writes a profile whose directory is `Default` and whose display name is `Profile 1`. The
+  read is read-only and forgiving in every direction: an absent file, an unreadable one, malformed
+  JSON, and a file with no profile cache all mean "no profiles for that browser", so a browser the
+  operator never installed cannot take down the page for the ones they did.
 - Browser-assisted login, so a parked account is logged in from the page instead of from a hand-run
   `/login` in a terminal. Login runs the unmodified CLI under that account's own folder as its
   `CLAUDE_CONFIG_DIR`, captures the sign-in URL it prints, and opens that URL in the browser profile

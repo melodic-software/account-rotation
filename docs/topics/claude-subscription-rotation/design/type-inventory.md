@@ -109,6 +109,7 @@ elapsed time and "now" come from an injected `TimeProvider` (org `overlays/dotne
 |---|---|---|
 | `GET /` | static | embedded `index.html`, `app.js`, `app.css` |
 | `GET /api/dashboard` | `DashboardAssembler` | cards, queue, proposal, live account |
+| `GET /api/browser-profiles` | `IBrowserProfileReader` | each browser's own profiles: directory, name, signed-in address |
 | `POST /api/accounts/{email}/switch` | `LiveDirectorySwitch` | 200 with `SwitchOutcome`; 409 with `SwitchRefusal` |
 | `POST /api/refresh` and `POST /api/accounts/{email}/refresh` | `QuotaRefresh` | 200 with per-account results including lockouts |
 | `POST /api/accounts` | roster add | body `{ email, alias?, browser, browserProfileDirectory? }`; creates the folder |

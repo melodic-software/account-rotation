@@ -3,6 +3,10 @@
 
   var POLL_MS = 10000;
   var BROWSERS = ["", "chrome", "edge", "brave"];
+  // The select value that means "this profile is not in the list"; every other
+  // value is an index into profileCatalog, because a directory name can hold
+  // any character and a joined key would break on the separator.
+  var OTHER = "other";
   var cards = document.getElementById("cards");
   var banner = document.getElementById("banner");
   var warnings = document.getElementById("warnings");
@@ -12,6 +16,10 @@
   var addEmail = document.getElementById("add-email");
   var toastTimer = null;
   var busy = false;
+  // What the machine's browsers publish, read once at load. Every profile
+  // picker on the page is built from this one list.
+  var profileCatalog = [];
+  var addFields = null;
   // The card node per e-mail, rebuilt by each render, so a login panel can be
   // hung on the right card without querying by an address that needs escaping.
   var cardNodes = {};
@@ -31,14 +39,62 @@
     return node;
   }
 
-  // The alias, browser, and profile-directory fields, built once and used both by
-  // the Add form and by each card's Edit panel, so the two can never drift apart.
+  // One row per field: a visible label wrapping its own control, so no id is
+  // needed and the Add form's rows cannot collide with a card's Edit rows.
+  function labelled(container, text, field) {
+    var row = element("label", "field");
+    row.appendChild(element("span", null, text));
+    row.appendChild(field);
+    container.appendChild(row);
+    return row;
+  }
+
+  // The display name is what the operator recognizes and the directory is what
+  // the launcher needs, and the two disagree often enough to matter, so the
+  // label carries both plus whichever address the profile is signed into.
+  function profileLabel(found) {
+    return found.name + (found.email ? " <" + found.email + ">" : "") + " (" + found.directory + ")";
+  }
+
+  function profileSelect() {
+    var select = element("select");
+    var none = element("option", null, "no browser profile mapped");
+    none.value = "";
+    select.appendChild(none);
+    var groups = {};
+    profileCatalog.forEach(function (found, index) {
+      if (!groups[found.browser]) {
+        groups[found.browser] = element("optgroup");
+        groups[found.browser].label = found.browser;
+        select.appendChild(groups[found.browser]);
+      }
+      var option = element("option", null, profileLabel(found));
+      option.value = String(index);
+      groups[found.browser].appendChild(option);
+    });
+    // The escape hatch: a profile the enumeration never saw is still typeable.
+    var other = element("option", null, "another profile (type the directory)");
+    other.value = OTHER;
+    select.appendChild(other);
+    return select;
+  }
+
+  function indexOfProfile(browser, directory) {
+    for (var i = 0; i < profileCatalog.length; i++) {
+      if (profileCatalog[i].browser === browser && profileCatalog[i].directory === directory) { return i; }
+    }
+    return -1;
+  }
+
+  // The alias, browser, and profile fields, built once and used both by the Add
+  // form and by each card's Edit panel, so the two can never drift apart.
   function accountFields(container, entry) {
     var values = entry || {};
     var alias = element("input");
     alias.type = "text";
-    alias.placeholder = "alias (optional)";
+    alias.placeholder = "optional, e.g. weekly";
     alias.value = values.alias || "";
+    labelled(container, "Alias", alias);
 
     var browser = element("select");
     BROWSERS.forEach(function (name) {
@@ -47,19 +103,70 @@
       browser.appendChild(option);
     });
     browser.value = values.browser || "";
+    labelled(container, "Browser", browser);
 
-    var profile = element("input");
-    profile.type = "text";
-    profile.placeholder = "browser profile directory, e.g. Profile 3";
-    profile.value = values.browserProfileDirectory || "";
+    var profile = profileSelect();
+    labelled(container, "Browser profile", profile);
 
-    [alias, browser, profile].forEach(function (field) { container.appendChild(field); });
-    return function () {
-      return {
-        alias: alias.value.trim() || null,
-        browser: browser.value || null,
-        browserProfileDirectory: profile.value.trim() || null
-      };
+    var typed = element("input");
+    typed.type = "text";
+    typed.placeholder = "e.g. Profile 3";
+    var typedRow = labelled(container, "Profile directory", typed);
+
+    // An entry already mapped to a profile the enumeration found selects it; one
+    // mapped to anything else falls through to the typed field, which is the only
+    // place that mapping can still be seen and edited.
+    var mapped = values.browserProfileDirectory
+      ? indexOfProfile(values.browser || "", values.browserProfileDirectory)
+      : -1;
+    if (mapped >= 0) {
+      profile.value = String(mapped);
+    } else if (values.browserProfileDirectory) {
+      profile.value = OTHER;
+      typed.value = values.browserProfileDirectory;
+    }
+
+    // The value the last auto-match put in the select, so a later one may
+    // replace it while a hand-picked value is left alone.
+    var autoPicked = null;
+
+    function sync() { typedRow.hidden = profile.value !== OTHER; }
+
+    profile.addEventListener("change", function () {
+      var found = profileCatalog[Number(profile.value)];
+      // Picking a profile names its browser too; showing that in the browser
+      // select keeps the two from disagreeing on the way to the server.
+      if (found) { browser.value = found.browser; }
+      sync();
+    });
+    sync();
+
+    return {
+      read: function () {
+        var found = profile.value !== "" && profile.value !== OTHER ? profileCatalog[Number(profile.value)] : null;
+        return {
+          alias: alias.value.trim() || null,
+          browser: browser.value || null,
+          browserProfileDirectory: found ? found.directory : (typed.value.trim() || null)
+        };
+      },
+      // Nine of ten accounts are already signed into a profile on this machine,
+      // so the mapping is derivable rather than typed. Overridable: it replaces
+      // an empty selection or its own previous guess, never a hand-picked one.
+      autoMatch: function (address) {
+        if (profile.value !== "" && profile.value !== autoPicked) { return; }
+        var wanted = (address || "").trim().toLowerCase();
+        var index = -1;
+        for (var i = 0; wanted && i < profileCatalog.length; i++) {
+          if (profileCatalog[i].email === wanted) { index = i; break; }
+        }
+        autoPicked = index < 0 ? null : String(index);
+        profile.value = autoPicked || "";
+        // Only on a hit: a miss clears the guess without undoing a browser the
+        // operator chose by hand.
+        if (index >= 0) { browser.value = profileCatalog[index].browser; }
+        sync();
+      }
     };
   }
 
@@ -234,14 +341,14 @@
     var panel = element("details", "edit");
     panel.appendChild(element("summary", null, "Edit"));
     var form = element("form", "roster-form");
-    var read = accountFields(form, account.roster);
+    var fields = accountFields(form, account.roster);
     var save = element("button", null, "Save");
     save.type = "submit";
     form.appendChild(save);
     form.addEventListener("submit", function (event) {
       event.preventDefault();
       panel.open = false;
-      mutate(accountPath(account.email), "PATCH", read(), function (result) {
+      mutate(accountPath(account.email), "PATCH", fields.read(), function (result) {
         showToast(result.ok ? account.email + " updated" : refused(result.body), result.ok ? "ok" : "error");
       });
     });
@@ -335,10 +442,10 @@
     Array.prototype.forEach.call(document.querySelectorAll("button"), function (button) { button.disabled = disabled; });
   }
 
-  var readAddFields = accountFields(document.getElementById("add-fields"), null);
   addForm.addEventListener("submit", function (event) {
     event.preventDefault();
-    var body = readAddFields();
+    if (!addFields) { return; }
+    var body = addFields.read();
     body.email = addEmail.value.trim();
     mutate("/api/accounts", "POST", body, function (result) {
       if (result.ok) {
@@ -350,6 +457,20 @@
     });
   });
 
-  refresh();
-  setInterval(refresh, POLL_MS);
+  addEmail.addEventListener("input", function () {
+    if (addFields) { addFields.autoMatch(addEmail.value); }
+  });
+
+  // Before the first render, so the Add form and every card's Edit panel are
+  // built from the same list. An enumeration that fails is an empty list, not a
+  // dead page: the typed field is still there.
+  fetch("/api/browser-profiles", { headers: { "Accept": "application/json" } })
+    .then(function (response) { return response.ok ? response.json() : []; })
+    .catch(function () { return []; })
+    .then(function (found) {
+      profileCatalog = Array.isArray(found) ? found : [];
+      addFields = accountFields(document.getElementById("add-fields"), null);
+      refresh();
+      setInterval(refresh, POLL_MS);
+    });
 })();
