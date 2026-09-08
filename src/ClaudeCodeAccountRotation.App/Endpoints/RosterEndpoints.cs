@@ -2,11 +2,13 @@ using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Dashboard;
 using ClaudeCodeAccountRotation.App.Security;
+using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Accounts;
 using ClaudeCodeAccountRotation.Core.Configuration;
 using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Ports;
+using ClaudeCodeAccountRotation.Core.Switching;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -139,8 +141,12 @@ internal static class RosterEndpoints
             ProfileFolderStore profiles,
             ClaudeStateFile stateFile,
             IClaudeCliLogout cli,
+            ILoginSessionRunner logins,
+            CredentialMutationGate gate,
+            SwitchOptions options,
             CancellationToken cancellationToken) =>
         {
+            ArgumentNullException.ThrowIfNull(options);
             Result<AccountEmail, string> parsed = AccountEmail.Parse(email);
             if (parsed.IsFailure)
             {
@@ -148,45 +154,85 @@ internal static class RosterEndpoints
             }
 
             AccountEmail target = parsed.Value;
-            if ((await stateFile.ReadAccountBlockAsync(cancellationToken))?.Email == target)
+            IDisposable? permit = null;
+            try
             {
-                return Refused("AccountIsLive", "That account is live; switch to another account first.");
-            }
-
-            string folder = profiles.FolderPathFor(target);
-            bool hasPair = File.Exists(Path.Combine(folder, FileSystemCredentialPairStore.FileName));
-            bool revoke = logout ?? true;
-            bool revoked = false;
-            if (hasPair && revoke)
-            {
-                Result<Unit, string> loggedOut = await cli.LogoutAsync(folder, cancellationToken);
-                if (loggedOut.IsFailure)
+                // A removal revokes a login and deletes a folder, so it is a credential
+                // mutation and takes the one gate like every other. Without it the
+                // delete could land between a switch's journal write and its unpark,
+                // taking away the folder the switch is about to rename out of, past the
+                // point where that switch can back out.
+                try
                 {
-                    return Refused(
-                        "LogoutFailed",
-                        "That account's login could not be revoked, so the folder was kept: " + loggedOut.Error
-                        + " Retry, or remove with logout=false to delete the folder without revoking.");
+                    permit = await gate.AcquireAsync(options.MutationGateTimeout, cancellationToken);
+                }
+                catch (TimeoutException)
+                {
+                    return Refused("MutationInProgress", "Another credential change is in progress; try the removal again in a moment.");
                 }
 
-                revoked = true;
-            }
+                // Read under the gate, not before it: a switch waiting on the gate can
+                // make this account the live one, and the answer from before that
+                // switch would be the answer to a question nobody asked.
+                if ((await stateFile.ReadAccountBlockAsync(cancellationToken))?.Email == target)
+                {
+                    return Refused("AccountIsLive", "That account is live; switch to another account first.");
+                }
 
-            if (Directory.Exists(folder))
+                string folder = profiles.FolderPathFor(target);
+                if (logins.IsRunningAgainst(folder))
+                {
+                    // The gate alone does not cover this: a login holds it only at the
+                    // end, so the child is still alive on an authenticated pipe. Delete
+                    // now and the operator's next paste recreates the folder with a
+                    // fresh, unrevoked token for the account they were told was gone.
+                    return Refused(
+                        "LoginInProgress",
+                        "A login is running against that account's folder; finish it or let it expire before removing the account.");
+                }
+
+                // From here on the request's own token is not consulted, the way a
+                // switch stops consulting it past its journal write: a browser that
+                // navigates away must not leave a revoked login beside a kept folder.
+                CancellationToken committed = CancellationToken.None;
+                bool hasPair = File.Exists(Path.Combine(folder, FileSystemCredentialPairStore.FileName));
+                bool revoke = logout ?? true;
+                bool revoked = false;
+                if (hasPair && revoke)
+                {
+                    Result<Unit, string> loggedOut = await cli.LogoutAsync(folder, committed);
+                    if (loggedOut.IsFailure)
+                    {
+                        return Refused(
+                            "LogoutFailed",
+                            "That account's login could not be revoked, so the folder was kept: " + loggedOut.Error
+                            + " Retry, or remove with logout=false to delete the folder without revoking.");
+                    }
+
+                    revoked = true;
+                }
+
+                if (Directory.Exists(folder))
+                {
+                    // Registers the folder with the store's own discovery guard, which
+                    // refuses to delete a path it has never listed. A folder that has
+                    // never been logged in carries no identity and so is never listed.
+                    await profiles.EnsureFolderAsync(target, committed);
+                    await profiles.DeleteFolderAsync(folder, committed);
+                }
+
+                await rosterFile.UpdateAsync(roster => roster.Without(target), committed);
+                return Results.Ok(new RemovalView(
+                    target.Value,
+                    revoked,
+                    hasPair && !revoked
+                        ? "The folder was deleted without a logout; that refresh token stays valid until its login expires."
+                        : null));
+            }
+            finally
             {
-                // Registers the folder with the store's own discovery guard, which
-                // refuses to delete a path it has never listed. A folder that has
-                // never been logged in carries no identity and so is never listed.
-                await profiles.EnsureFolderAsync(target, cancellationToken);
-                await profiles.DeleteFolderAsync(folder, cancellationToken);
+                permit?.Dispose();
             }
-
-            await rosterFile.UpdateAsync(roster => roster.Without(target), cancellationToken);
-            return Results.Ok(new RemovalView(
-                target.Value,
-                revoked,
-                hasPair && !revoked
-                    ? "The folder was deleted without a logout; that refresh token stays valid until its login expires."
-                    : null));
         });
 
         mutations.MapPost("/accounts/{email}/adopt-live", static async (

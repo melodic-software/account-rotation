@@ -2,8 +2,10 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
+using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core.Accounts;
 using ClaudeCodeAccountRotation.Core.Identity;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeCodeAccountRotation.App.Tests.Endpoints;
 
@@ -215,6 +217,54 @@ public sealed class RosterEndpointTests
         response.StatusCode.ShouldBe(HttpStatusCode.Conflict);
         (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["refusal"]!.GetValue<string>().ShouldBe("AccountIsLive");
         factory.Cli.LogoutCalls.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task RemovingAnAccountIsRefusedWhileAnotherCredentialChangeHoldsTheGate()
+    {
+        // The removal revokes a login and deletes a folder, so it belongs behind the
+        // one gate every other credential-touching operation takes. Landing between a
+        // switch's journal write and its unpark takes away the folder that switch is
+        // about to rename out of, past the point where it can back out.
+        await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
+        string folder = await factory.ParkedProfileAsync(ParkedEmail, "refresh-parked", TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        await client.PostAsJsonAsync(_accounts, new { email = ParkedEmail }, TestContext.Current.CancellationToken);
+        using IDisposable permit = await factory.Services
+            .GetRequiredService<CredentialMutationGate>()
+            .AcquireAsync(TimeSpan.Zero, TestContext.Current.CancellationToken);
+
+        using HttpResponseMessage response = await client.DeleteAsync(Account(ParkedEmail), TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["refusal"]!
+            .GetValue<string>().ShouldBe("MutationInProgress");
+        Directory.Exists(folder).ShouldBeTrue();
+        factory.Cli.LogoutCalls.ShouldBeEmpty();
+        (await StoredRosterAsync(factory, TestContext.Current.CancellationToken)).Find(Email(ParkedEmail)).ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task RemovingAnAccountALoginIsRunningAgainstIsRefused()
+    {
+        // The login child is still alive on an authenticated pipe. Revoke and delete
+        // now and the operator's next paste recreates the folder with a fresh,
+        // unrevoked token for the account the response said had been removed.
+        await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
+        string folder = await factory.ParkedProfileAsync(ParkedEmail, "refresh-parked", TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        await client.PostAsJsonAsync(_accounts, new { email = ParkedEmail }, TestContext.Current.CancellationToken);
+        using HttpResponseMessage started = await client.PostAsync(Account(ParkedEmail, "/login"), content: null, TestContext.Current.CancellationToken);
+        started.StatusCode.ShouldBe(HttpStatusCode.OK);
+
+        using HttpResponseMessage response = await client.DeleteAsync(Account(ParkedEmail), TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["refusal"]!
+            .GetValue<string>().ShouldBe("LoginInProgress");
+        Directory.Exists(folder).ShouldBeTrue();
+        factory.Cli.LogoutCalls.ShouldBeEmpty();
+        (await StoredRosterAsync(factory, TestContext.Current.CancellationToken)).Find(Email(ParkedEmail)).ShouldNotBeNull();
     }
 
     [Fact]
