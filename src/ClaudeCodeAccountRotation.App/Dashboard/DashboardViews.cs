@@ -18,7 +18,20 @@ internal sealed record AccountCardView(
     bool HasCredentials,
     string? Folder,
     StatuslineQuotaView? Quota = null,
-    string? QuotaNote = null);
+    string? QuotaNote = null,
+    RosterEntryView? Roster = null);
+
+/// <summary>
+/// The roster entry behind a card, or null when the account is on the machine
+/// but not on the roster: that is the state Adopt exists to end.
+/// </summary>
+internal sealed record RosterEntryView(
+    string Email,
+    string? Alias,
+    string? Browser,
+    string? BrowserProfileDirectory,
+    bool Paused,
+    string? Notes);
 
 /// <summary>
 /// The windows a live session observed, as the tee recorded them. A card only

@@ -56,9 +56,12 @@ internal sealed class ProfileFolderStore
         return profiles;
     }
 
+    /// <summary>Where an account's folder sits, whether or not it exists yet.</summary>
+    public string FolderPathFor(AccountEmail email) => Path.Combine(_profilesRoot, ProfileFolderName.FromEmail(email));
+
     public async Task<ParkedProfile> EnsureFolderAsync(AccountEmail email, CancellationToken cancellationToken)
     {
-        string folder = Path.Combine(_profilesRoot, ProfileFolderName.FromEmail(email));
+        string folder = FolderPathFor(email);
         Directory.CreateDirectory(folder);
         _discovered[folder] = 0;
         OAuthAccountBlock? account = await ReadAccountInFolderAsync(folder, cancellationToken);

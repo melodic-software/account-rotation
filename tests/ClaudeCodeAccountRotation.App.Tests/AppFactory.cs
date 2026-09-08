@@ -83,7 +83,12 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseSetting("ClaudeCodeAccountRotation:ConfigPath", ConfigPath);
-        builder.ConfigureTestServices(services => services.Replace(ServiceDescriptor.Singleton<IClaudeCliAuthStatus>(Cli)));
+        builder.ConfigureTestServices(services =>
+        {
+            services.Replace(ServiceDescriptor.Singleton<IClaudeCliAuthStatus>(Cli));
+            // Both ports, or a removal would resolve the real CLI on this machine.
+            services.Replace(ServiceDescriptor.Singleton<IClaudeCliLogout>(Cli));
+        });
     }
 
     // The base Dispose(bool) routes through DisposeAsync, so the host (and with it the
@@ -97,11 +102,27 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
         }
     }
 
-    internal sealed class CannedCli : IClaudeCliAuthStatus
+    internal sealed class CannedCli : IClaudeCliAuthStatus, IClaudeCliLogout
     {
         public string? Email { get; set; }
 
+        /// <summary>What every folder reports; "max" is the only tier the roster admits.</summary>
+        public string? SubscriptionType { get; set; } = "max";
+
+        /// <summary>Every config directory <c>auth logout</c> was run under, in order.</summary>
+        public List<string> LogoutCalls { get; } = [];
+
+        public string? LogoutError { get; set; }
+
         public Task<Result<ClaudeAuthStatus, string>> ReadAsync(string? configDirectory, CancellationToken cancellationToken) =>
-            Task.FromResult(Result<ClaudeAuthStatus, string>.Success(new ClaudeAuthStatus(true, Email, "claude.ai", "Personal", "max", null)));
+            Task.FromResult(Result<ClaudeAuthStatus, string>.Success(new ClaudeAuthStatus(true, Email, "claude.ai", "Personal", SubscriptionType, null)));
+
+        public Task<Result<Unit, string>> LogoutAsync(string configDirectory, CancellationToken cancellationToken)
+        {
+            LogoutCalls.Add(configDirectory);
+            return Task.FromResult(LogoutError is string error
+                ? Result<Unit, string>.Failure(error)
+                : Result<Unit, string>.Success(Unit.Value));
+        }
     }
 }

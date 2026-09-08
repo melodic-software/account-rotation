@@ -1,5 +1,6 @@
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Switching;
+using ClaudeCodeAccountRotation.Core.Accounts;
 using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Ports;
 using ClaudeCodeAccountRotation.Core.Quota;
@@ -7,21 +8,36 @@ using ClaudeCodeAccountRotation.Core.Quota;
 namespace ClaudeCodeAccountRotation.App.Dashboard;
 
 /// <summary>
-/// Builds the page's model from the live directory and the profile folders:
-/// one card per account, the live one first, plus the reconciliation banner.
-/// Every read first repairs a state file a session wrote a stale block back
-/// into, so the page never shows the outgoing account as live for long.
-/// Quota and ranking join in later phases.
+/// Builds the page's model from three sources that only partly overlap: the
+/// live directory, the profile folders on disk, and the roster the operator
+/// edits. An account gets one card whichever of the three it appears in, so a
+/// roster entry that has never been logged in still shows up (as "needs
+/// login") and a folder that predates the roster still shows up (with Adopt
+/// offered). Every read first repairs a state file a session wrote a stale
+/// block back into, so the page never shows the outgoing account as live for
+/// long. Ranking joins in a later phase.
 /// </summary>
 internal sealed class DashboardAssembler(
     ClaudeStateFile stateFile,
     ICredentialPairStore pairs,
     ProfileFolderStore profiles,
+    RosterFile rosterFile,
     RateLimitGuardTeeFileReader tee,
     LiveDirectorySwitch executor,
     DashboardState state,
     TimeProvider timeProvider)
 {
+    /// <summary>The roster entry as the page reads it.</summary>
+    public static RosterEntryView? View(RosterEntry? entry) => entry is null
+        ? null
+        : new RosterEntryView(
+            entry.Email.Value,
+            entry.Alias,
+            entry.Browser?.ToString().ToLowerInvariant(),
+            entry.BrowserProfileDirectory,
+            entry.Paused,
+            entry.Notes);
+
     public async Task<DashboardView> AssembleAsync(CancellationToken cancellationToken)
     {
         _ = await executor.RepairStaleIdentityAsync(cancellationToken);
@@ -29,6 +45,7 @@ internal sealed class DashboardAssembler(
         CredentialPair? livePair = await pairs.ReadLiveAsync(cancellationToken);
         IReadOnlyList<ParkedProfile> parked = await profiles.ListAsync(cancellationToken);
         StatuslineSnapshot? snapshot = await tee.ReadAsync(cancellationToken);
+        Roster roster = await rosterFile.ReadAsync(cancellationToken);
         AccountEmail? liveEmail = liveAccount?.Email;
 
         List<AccountCardView> cards = [];
@@ -36,12 +53,20 @@ internal sealed class DashboardAssembler(
         {
             ParkedProfile? ownFolder = parked.FirstOrDefault(profile => profile.Email == live);
             (StatuslineQuotaView? quota, string? note) = Attribute(snapshot, live);
-            cards.Add(new AccountCardView(live.Value, IsLive: true, HasCredentials: livePair is not null, ownFolder?.FolderPath, quota, note));
+            cards.Add(new AccountCardView(live.Value, IsLive: true, HasCredentials: livePair is not null, ownFolder?.FolderPath, quota, note, View(roster.Find(live))));
         }
 
         cards.AddRange(parked
             .Where(profile => profile.Email != liveEmail)
-            .Select(profile => new AccountCardView(profile.Email.Value, IsLive: false, profile.HasCredentials, profile.FolderPath)));
+            .Select(profile => new AccountCardView(profile.Email.Value, IsLive: false, profile.HasCredentials, profile.FolderPath, Roster: View(roster.Find(profile.Email)))));
+
+        // A roster entry the operator added but has not logged in yet owns no
+        // identity file, so the folder listing above cannot see it. Its card is
+        // what makes Add visible on the page at all.
+        List<AccountCardView> rosterOnly = [.. roster.Entries
+            .Where(entry => !cards.Exists(card => string.Equals(card.Email, entry.Email.Value, StringComparison.Ordinal)))
+            .Select(entry => new AccountCardView(entry.Email.Value, IsLive: false, HasCredentials: false, profiles.FolderPathFor(entry.Email), Roster: View(entry)))];
+        cards.AddRange(rosterOnly);
         cards.Sort(static (left, right) => string.CompareOrdinal(left.Email, right.Email));
 
         List<string> warnings = [];

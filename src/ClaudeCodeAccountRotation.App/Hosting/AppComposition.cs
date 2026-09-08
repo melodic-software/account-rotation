@@ -120,6 +120,7 @@ internal static class AppComposition
         app.MapGet("/", static () => Results.Content(EmbeddedPage.IndexHtml, "text/html; charset=utf-8"));
         DashboardEndpoints.Map(app);
         SwitchEndpoints.Map(app);
+        RosterEndpoints.Map(app);
     }
 
     /// <summary>
