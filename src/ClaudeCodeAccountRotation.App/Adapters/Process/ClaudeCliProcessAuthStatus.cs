@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Ports;
+using Microsoft.Extensions.Logging;
 
 namespace ClaudeCodeAccountRotation.App.Adapters.Process;
 
@@ -12,20 +13,29 @@ namespace ClaudeCodeAccountRotation.App.Adapters.Process;
 /// carrying the diagnostic text. Two commands run this way: <c>auth status
 /// --json</c>, the authority on which account a folder holds, and <c>auth
 /// logout</c>, which revokes a removed account's login.
+/// <para>
+/// A failure carries the command and its exit code and nothing else. What the
+/// child wrote goes to the log, never into the returned string: those strings
+/// are embedded verbatim in the responses the page renders, and the child's
+/// output is on the wrong side of that boundary whatever it happens to hold.
+/// </para>
 /// </summary>
-internal sealed class ClaudeCliProcessAuthStatus : IClaudeCliAuthStatus, IClaudeCliLogout
+internal sealed partial class ClaudeCliProcessAuthStatus : IClaudeCliAuthStatus, IClaudeCliLogout
 {
     private static readonly string[] _statusArguments = ["auth", "status", "--json"];
     private static readonly string[] _logoutArguments = ["auth", "logout"];
 
     private readonly ClaudeExecutable _executable;
     private readonly TimeSpan _timeout;
+    private readonly ILogger<ClaudeCliProcessAuthStatus> _logger;
 
-    public ClaudeCliProcessAuthStatus(ClaudeExecutable executable, TimeSpan timeout)
+    public ClaudeCliProcessAuthStatus(ClaudeExecutable executable, TimeSpan timeout, ILogger<ClaudeCliProcessAuthStatus> logger)
     {
         ArgumentNullException.ThrowIfNull(executable);
+        ArgumentNullException.ThrowIfNull(logger);
         _executable = executable;
         _timeout = timeout;
+        _logger = logger;
     }
 
     public async Task<Result<ClaudeAuthStatus, string>> ReadAsync(string? configDirectory, CancellationToken cancellationToken)
@@ -78,11 +88,18 @@ internal sealed class ClaudeCliProcessAuthStatus : IClaudeCliAuthStatus, IClaude
 
         string output = await standardOutput;
         string error = await standardError;
-        return process.ExitCode == 0
-            ? Result<string, string>.Success(output)
-            : Result<string, string>.Failure(
-                command + " exited with code " + process.ExitCode.ToString(System.Globalization.CultureInfo.InvariantCulture) + ": " + (error + output).Trim());
+        if (process.ExitCode == 0)
+        {
+            return Result<string, string>.Success(output);
+        }
+
+        string exitCode = process.ExitCode.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        LogNonZeroExit(command, exitCode, (error + output).Trim());
+        return Result<string, string>.Failure(command + " exited with code " + exitCode + "; see the log for what it printed");
     }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "{Command} exited with code {ExitCode} and printed: {Output}")]
+    private partial void LogNonZeroExit(string command, string exitCode, string output);
 
     private static Result<ClaudeAuthStatus, string> Parse(string output)
     {

@@ -15,6 +15,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Logging;
 
 namespace ClaudeCodeAccountRotation.App.Hosting;
 
@@ -97,9 +98,7 @@ internal static class AppComposition
             Environment.GetEnvironmentVariable("PATH"),
             OperatingSystem.IsWindows(),
             Environment.SystemDirectory);
-        (IClaudeCliAuthStatus status, IClaudeCliLogout logout) = ResolveCli(cli);
-        services.AddSingleton(status);
-        services.AddSingleton(logout);
+        AddCli(services, cli);
         // The login child factory: a real process, or a start that reports why no
         // CLI could be resolved rather than throwing at the first login.
         LoginChildFactory loginChild = cli.IsSuccess
@@ -157,17 +156,29 @@ internal static class AppComposition
             .AddTypedClient<ITokenRefreshClient>(http => new ClaudeOAuthTokenRefreshClient(http, userAgent, TimeProvider.System));
     }
 
-    /// <summary>The one CLI process adapter, offered under both of the ports it serves.</summary>
-    private static (IClaudeCliAuthStatus Status, IClaudeCliLogout Logout) ResolveCli(Result<ClaudeExecutable, string> located)
+    /// <summary>
+    /// The one CLI process adapter, registered under both of the ports it serves.
+    /// Through the container rather than by hand, because the adapter needs a
+    /// logger: what a failing child printed goes there and never into the
+    /// failure string the page renders.
+    /// </summary>
+    private static void AddCli(IServiceCollection services, Result<ClaudeExecutable, string> located)
     {
         if (located.IsFailure)
         {
             UnavailableClaudeCli unavailable = new(located.Error);
-            return (unavailable, unavailable);
+            services.AddSingleton<IClaudeCliAuthStatus>(unavailable);
+            services.AddSingleton<IClaudeCliLogout>(unavailable);
+            return;
         }
 
-        ClaudeCliProcessAuthStatus cli = new(located.Value, _cliTimeout);
-        return (cli, cli);
+        ClaudeExecutable executable = located.Value;
+        services.AddSingleton(provider => new ClaudeCliProcessAuthStatus(
+            executable,
+            _cliTimeout,
+            provider.GetRequiredService<ILogger<ClaudeCliProcessAuthStatus>>()));
+        services.AddSingleton<IClaudeCliAuthStatus>(static provider => provider.GetRequiredService<ClaudeCliProcessAuthStatus>());
+        services.AddSingleton<IClaudeCliLogout>(static provider => provider.GetRequiredService<ClaudeCliProcessAuthStatus>());
     }
 
     /// <summary>Stands in when no CLI could be resolved: every call reports why.</summary>
