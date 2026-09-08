@@ -112,6 +112,7 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
             services.Replace(ServiceDescriptor.Singleton<ILoginSessionRunner>(provider => new ClaudeCliLoginSessionRunner(
                 LoginChild.Start,
                 provider.GetRequiredService<ProfileFolderStore>(),
+                provider.GetRequiredService<ClaudeStateFile>(),
                 provider.GetRequiredService<CredentialMutationGate>(),
                 Clock)));
         });

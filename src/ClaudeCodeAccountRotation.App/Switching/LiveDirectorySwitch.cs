@@ -43,6 +43,7 @@ internal sealed partial class LiveDirectorySwitch
     private readonly ProfileFolderStore _profiles;
     private readonly SwitchJournal _journal;
     private readonly CredentialMutationGate _gate;
+    private readonly ILoginSessionRunner _logins;
     private readonly IClaudeCliAuthStatus _authStatus;
     private readonly ManagedLoginPolicyReader _policyReader;
     private readonly SwitchOptions _options;
@@ -57,6 +58,7 @@ internal sealed partial class LiveDirectorySwitch
         ProfileFolderStore profiles,
         SwitchJournal journal,
         CredentialMutationGate gate,
+        ILoginSessionRunner logins,
         IClaudeCliAuthStatus authStatus,
         ManagedLoginPolicyReader policyReader,
         SwitchOptions options,
@@ -69,6 +71,7 @@ internal sealed partial class LiveDirectorySwitch
         _profiles = profiles;
         _journal = journal;
         _gate = gate;
+        _logins = logins;
         _authStatus = authStatus;
         _policyReader = policyReader;
         _options = options;
@@ -214,6 +217,20 @@ internal sealed partial class LiveDirectorySwitch
         }
 
         SwitchPlan plan = planned.Value;
+        // A login owns its folder from the moment it is admitted until its child has
+        // ended, and it writes a credential pair into that folder at a moment nothing
+        // here chooses. Renaming that folder's pair out from under it leaves the
+        // account with two pairs, one live and one the login writes afterwards, which
+        // is the second holder the whole design refuses. The login is admitted under
+        // this same gate, so a login already in flight is visible here and one
+        // starting now waits for this switch to finish.
+        if (_logins.IsRunningAgainst(plan.IncomingFolderPath)
+            || (plan.OutgoingFolderPath is string outgoingFolderPath && _logins.IsRunningAgainst(outgoingFolderPath)))
+        {
+            LogRefused(target.Value, SwitchRefusal.LoginInProgress);
+            return Result<SwitchOutcome, SwitchRefusal>.Failure(SwitchRefusal.LoginInProgress);
+        }
+
         Result<IAsyncDisposable, string> held = await _pairs.AcquireRefreshLockAsync(_options.RefreshLockWaitBound, cancellationToken);
         if (held.IsFailure)
         {

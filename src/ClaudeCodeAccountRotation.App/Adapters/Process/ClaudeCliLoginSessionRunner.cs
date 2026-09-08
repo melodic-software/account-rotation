@@ -45,18 +45,26 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
 
     private readonly LoginChildFactory _start;
     private readonly ProfileFolderStore _profiles;
+    private readonly ClaudeStateFile _stateFile;
     private readonly CredentialMutationGate _gate;
     private readonly TimeProvider _clock;
     private readonly ConcurrentDictionary<string, Session> _sessions = new(StringComparer.Ordinal);
 
-    public ClaudeCliLoginSessionRunner(LoginChildFactory start, ProfileFolderStore profiles, CredentialMutationGate gate, TimeProvider clock)
+    public ClaudeCliLoginSessionRunner(
+        LoginChildFactory start,
+        ProfileFolderStore profiles,
+        ClaudeStateFile stateFile,
+        CredentialMutationGate gate,
+        TimeProvider clock)
     {
         ArgumentNullException.ThrowIfNull(start);
         ArgumentNullException.ThrowIfNull(profiles);
+        ArgumentNullException.ThrowIfNull(stateFile);
         ArgumentNullException.ThrowIfNull(gate);
         ArgumentNullException.ThrowIfNull(clock);
         _start = start;
         _profiles = profiles;
+        _stateFile = stateFile;
         _gate = gate;
         _clock = clock;
     }
@@ -68,29 +76,67 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     /// </summary>
     public static string[] Arguments(AccountEmail email) => ["auth", "login", "--email", email.Value];
 
+    /// <summary>
+    /// Admits a login and starts its child, all of it under the one mutation
+    /// gate, which is what makes starting a login safe beside a switch.
+    /// <para>
+    /// Three things happen inside the gate and none of them is safe outside it.
+    /// The scan for a login already running against the folder, and the
+    /// registration that makes this one visible to that scan, are one step, so
+    /// a double-submit cannot put two children on one <c>CLAUDE_CONFIG_DIR</c>.
+    /// The live account is read again here, not just at the endpoint, because a
+    /// switch can complete between the endpoint's read and this call, and a
+    /// login into the live account's own parked folder is the second holder the
+    /// tool exists to prevent. And because the switch reads the registration
+    /// under the same gate, a switch either sees this login and refuses or
+    /// completes before this one is admitted; the two can never interleave.
+    /// </para>
+    /// </summary>
     public async Task<Result<LoginSession, string>> StartAsync(AccountEmail email, string folderPath, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(folderPath);
         string folder = Path.GetFullPath(folderPath);
-        foreach (Session running in _sessions.Values)
+        Session session;
+        IDisposable? permit = null;
+        try
         {
-            EnforceExpiry(running);
-            if (running.State == LoginSessionState.Pending
-                && string.Equals(running.Folder, folder, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            try
+            {
+                permit = await _gate.AcquireAsync(_gateWait, cancellationToken);
+            }
+            catch (TimeoutException)
+            {
+                return Result<LoginSession, string>.Failure("another credential change is in progress; try the login again in a moment");
+            }
+
+            if (RunningAgainst(folder) is Session running)
             {
                 return Result<LoginSession, string>.Failure(
                     "a login for " + running.Email.Value + " is already running against that folder; finish it or let it expire first");
             }
-        }
 
-        Result<ILoginChild, string> child = _start(Arguments(email), folder);
-        if (child.IsFailure)
+            if ((await _stateFile.ReadAccountBlockAsync(cancellationToken))?.Email == email)
+            {
+                return Result<LoginSession, string>.Failure(
+                    "that account is live on this machine; switch away from it before logging it in again");
+            }
+
+            Result<ILoginChild, string> child = _start(Arguments(email), folder);
+            if (child.IsFailure)
+            {
+                return Result<LoginSession, string>.Failure(child.Error);
+            }
+
+            session = new Session(LoginSessionId.New(), email, folder, child.Value, _clock.GetUtcNow() + SessionLifetime, SessionLifetime, _clock);
+            _sessions[session.Id.Value] = session;
+        }
+        finally
         {
-            return Result<LoginSession, string>.Failure(child.Error);
+            permit?.Dispose();
         }
 
-        Session session = new(LoginSessionId.New(), email, folder, child.Value, _clock.GetUtcNow() + SessionLifetime, SessionLifetime, _clock);
-        _sessions[session.Id.Value] = session;
+        // Outside the gate: the pump's own finish takes it, and the wait below can
+        // outlast the child.
         session.Pump = Task.Run(() => PumpAsync(session), CancellationToken.None);
 
         await WaitAsync(session.Started.Task, cancellationToken);
@@ -140,14 +186,43 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
         TaskCompletionSource echo = new(TaskCreationOptions.RunContinuationsAsynchronously);
         lock (session.Sync)
         {
+            // One code in flight per session. The pump answers through the field, so
+            // a second submit that replaced it would leave the first caller's own
+            // task uncompleted until its reply budget ran out, and the CLI's answer
+            // to the first code would be read as the answer to the second.
+            if (session.Echo is not null)
+            {
+                return Result<LoginSession, string>.Failure("that login is still checking the last code; wait for its answer before pasting again");
+            }
+
             session.Message = null;
             session.Output.Clear();
             session.Echo = echo;
         }
 
-        await session.Child.WriteCodeAsync(trimmed, cancellationToken);
-        await WaitAsync(echo.Task, cancellationToken);
+        try
+        {
+            await session.Child.WriteCodeAsync(trimmed, cancellationToken);
+            await WaitAsync(echo.Task, cancellationToken);
+        }
+        finally
+        {
+            lock (session.Sync)
+            {
+                if (ReferenceEquals(session.Echo, echo))
+                {
+                    session.Echo = null;
+                }
+            }
+        }
+
         return Result<LoginSession, string>.Success(Snapshot(session));
+    }
+
+    public bool IsRunningAgainst(string folderPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(folderPath);
+        return RunningAgainst(Path.GetFullPath(folderPath)) is not null;
     }
 
     public LoginSession? Status(LoginSessionId id)
@@ -298,6 +373,27 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
             session,
             LoginSessionState.Completed,
             adopted ? "Logged in as " + session.Email.Value + "." : ResidueKeptMessage);
+    }
+
+    /// <summary>
+    /// The pending session that owns <paramref name="folder"/>, or null. Expiry
+    /// is enforced first, so a session whose ten minutes ran out while nothing
+    /// asked releases its folder here rather than holding it until something
+    /// polls the session itself.
+    /// </summary>
+    private Session? RunningAgainst(string folder)
+    {
+        foreach (Session running in _sessions.Values)
+        {
+            EnforceExpiry(running);
+            if (running.State == LoginSessionState.Pending
+                && string.Equals(running.Folder, folder, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            {
+                return running;
+            }
+        }
+
+        return null;
     }
 
     private void EnforceExpiry(Session session)

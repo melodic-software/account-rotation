@@ -108,6 +108,7 @@ internal static class AppComposition
         services.AddSingleton<ILoginSessionRunner>(provider => new ClaudeCliLoginSessionRunner(
             loginChild,
             provider.GetRequiredService<ProfileFolderStore>(),
+            provider.GetRequiredService<ClaudeStateFile>(),
             provider.GetRequiredService<CredentialMutationGate>(),
             provider.GetRequiredService<TimeProvider>()));
         services.AddSingleton<LiveDirectorySwitch>();
