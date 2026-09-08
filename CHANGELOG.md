@@ -16,6 +16,26 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- The account roster and its page controls: Add, Pause, Remove, and Adopt, so getting the other
+  accounts onto a machine never means editing a file or reaching for curl. Add creates the profile
+  folder and the card says "needs login"; Pause takes an account out of the ranked queue without
+  taking it off the page; Adopt puts the account the machine is already logged in as on the roster;
+  Edit remaps an account's alias, browser, and browser profile directory. Only Max accounts join: a
+  Team or Enterprise seat is refused with its reason, because that seat exposes no usage buckets and
+  is never rotated. An account with no login to read yet joins as "needs login" rather than being
+  refused. The roster lives in `roster.json` under app data and is written through the same atomic
+  path as every other file the tool owns.
+- Removing an account revokes its login by default (`DELETE /api/accounts/{email}?logout=`). A
+  deleted folder leaves recoverable bytes holding a refresh token valid for the rest of its 28 days,
+  so revocation is what removal means: a failed logout refuses the delete rather than stranding a
+  live token, and `logout=false` is the operator's deliberate override, with the response saying
+  plainly that the token was not revoked. A folder holding no credential pair skips the logout,
+  since there is nothing to revoke. Removing the live account is refused.
+- A browser launcher for the Chromium family: the executable resolves from the new
+  `browserExecutables` configuration overrides first, then from the platform's known install
+  locations for Chrome, Edge, and Brave, and the profile directory and the URL are passed as an
+  argument array rather than a command line, so ten accounts get ten browser profiles and no URL is
+  ever parsed by a shell.
 - Quota reads: the usage response's generic `limits[]` array and `extra_usage` block are parsed into
   card-ready types, so the five-hour, weekly all-models, and any weekly scoped bucket render without
   code changes when Anthropic adds or renames one.

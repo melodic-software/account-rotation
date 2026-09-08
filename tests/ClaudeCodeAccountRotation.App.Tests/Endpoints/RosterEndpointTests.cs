@@ -261,6 +261,25 @@ public sealed class RosterEndpointTests
     }
 
     [Fact]
+    public async Task ThePageDrivesEveryRosterOperationAndOffersNoLoginYet()
+    {
+        await using AppFactory factory = new();
+        using HttpClient client = factory.CreateClient();
+
+        string html = await client.GetStringAsync(new Uri("/", UriKind.Relative), TestContext.Current.CancellationToken);
+        string script = await client.GetStringAsync(new Uri("/app.js", UriKind.Relative), TestContext.Current.CancellationToken);
+
+        html.ShouldContain("Add an account");
+        script.ShouldContain("/api/accounts");
+        script.ShouldContain("adopt-live");
+        script.ShouldContain("\"PATCH\"");
+        script.ShouldContain("\"DELETE\"");
+        // The login mechanism waits on the spike that picks it; the page must not
+        // offer a login button or a login endpoint before that verdict exists.
+        script.ShouldNotContain("/login");
+    }
+
+    [Fact]
     public async Task ARosterMutationWithoutTheCustomHeaderIsForbidden()
     {
         await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
