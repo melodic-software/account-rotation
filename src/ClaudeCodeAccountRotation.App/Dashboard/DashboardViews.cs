@@ -18,7 +18,20 @@ internal sealed record AccountCardView(
     bool HasCredentials,
     string? Folder,
     StatuslineQuotaView? Quota = null,
-    string? QuotaNote = null);
+    string? QuotaNote = null,
+    RosterEntryView? Roster = null);
+
+/// <summary>
+/// The roster entry behind a card, or null when the account is on the machine
+/// but not on the roster: that is the state Adopt exists to end.
+/// </summary>
+internal sealed record RosterEntryView(
+    string Email,
+    string? Alias,
+    string? Browser,
+    string? BrowserProfileDirectory,
+    bool Paused,
+    string? Notes);
 
 /// <summary>
 /// The windows a live session observed, as the tee recorded them. A card only
@@ -42,6 +55,20 @@ internal sealed record SwitchOutcomeView(
     DateTimeOffset At);
 
 internal sealed record SwitchRefusalView(string Refusal, string Message);
+
+/// <summary>
+/// A login in flight, as the page sees it. The sign-in URL is an authorize URL
+/// and carries no token; the message comes from the runner's fixed vocabulary,
+/// so neither the one-time code nor the CLI's own output ever reaches here.
+/// </summary>
+internal sealed record LoginSessionView(
+    string Id,
+    string Email,
+    string State,
+    string? Message,
+    string? SignInUrl,
+    string? BrowserError,
+    DateTimeOffset ExpiresAt);
 
 /// <summary>Held across requests: the last reconciliation report for the banner.</summary>
 internal sealed class DashboardState

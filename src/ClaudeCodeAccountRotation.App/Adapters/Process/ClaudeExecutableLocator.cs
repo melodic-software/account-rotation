@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using ClaudeCodeAccountRotation.Core;
 
 namespace ClaudeCodeAccountRotation.App.Adapters.Process;
@@ -11,7 +12,84 @@ namespace ClaudeCodeAccountRotation.App.Adapters.Process;
 /// one quoted command line the interpreter needs; the interpreter itself is
 /// the system directory's, never one found on PATH.
 /// </summary>
-internal sealed record ClaudeExecutable(string FileName, IReadOnlyList<string> ArgumentPrefix, string? Shim = null);
+internal sealed record ClaudeExecutable(string FileName, IReadOnlyList<string> ArgumentPrefix, string? Shim = null)
+{
+    /// <summary>
+    /// How every invocation of the CLI is started: never a shell, never a
+    /// joined command line except the one the interpreter forces for an npm
+    /// shim, and under <paramref name="configDirectory"/> when one is given so
+    /// a command can only ever see one account's config root. Standard output
+    /// and error are redirected; a caller that also writes to the child
+    /// redirects standard input itself.
+    /// </summary>
+    public ProcessStartInfo StartInfo(IReadOnlyList<string> arguments, string? configDirectory)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+        ProcessStartInfo startInfo = new(FileName)
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+
+        if (Shim is string shim)
+        {
+            // cmd.exe does not parse its command line by the argument-list rules, and an
+            // argument-list entry is quoted only when it holds a space or a quote, so a
+            // shim path carrying "&" would be read as a command separator. With /s the
+            // interpreter strips the outer quotes and runs the rest; the inner quotes keep
+            // the path one operand. A Windows path can never contain a quote itself. Every
+            // argument is quoted the same way, so none of them can separate commands
+            // either, whoever built it and whatever it came from.
+            startInfo.Arguments = "/d /s /c \"\"" + shim + "\"" + string.Concat(arguments.Select(OneInterpreterOperand)) + "\"";
+        }
+        else
+        {
+            foreach (string argument in ArgumentPrefix.Concat(arguments))
+            {
+                startInfo.ArgumentList.Add(argument);
+            }
+        }
+
+        if (configDirectory is not null)
+        {
+            startInfo.Environment["CLAUDE_CONFIG_DIR"] = configDirectory;
+        }
+
+        return startInfo;
+    }
+
+    /// <summary>
+    /// One argument as a single operand of the interpreter's command line, with
+    /// the leading space that separates it from the one before.
+    /// <para>
+    /// Quotes neutralize every separator <c>cmd.exe</c> reads: <c>&amp;</c>,
+    /// <c>|</c>, <c>&lt;</c>, <c>&gt;</c>, <c>^</c>, and the parentheses. The two
+    /// characters quoting cannot neutralize are refused instead. A quote would
+    /// end the operand, and <c>%name%</c> is expanded before quoting is
+    /// considered, with no escape for it on a command line (<c>%%</c> is a batch
+    /// file's escape, not the interpreter's). Nothing this tool passes holds
+    /// either: the arguments are compile-time constants plus an account e-mail,
+    /// whose allowlist admits neither. The refusal is the backstop for the day
+    /// that stops being true.
+    /// </para>
+    /// </summary>
+    private static string OneInterpreterOperand(string argument)
+    {
+        ArgumentNullException.ThrowIfNull(argument);
+        if (argument.Any(static character => character is '"' or '%' || char.IsControl(character)))
+        {
+            // Deliberately without the argument itself: it is the one thing here that
+            // may be external, and this message reaches a log.
+            throw new ArgumentException(
+                "An argument passed through the command interpreter holds a quote, a percent sign, or a control character, none of which can be quoted safely.",
+                nameof(argument));
+        }
+
+        return " \"" + argument + "\"";
+    }
+}
 
 /// <summary>
 /// Resolves the <c>claude</c> executable: the <c>claudeExecutable</c> configuration

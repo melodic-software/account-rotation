@@ -546,7 +546,11 @@ work item settles the login mechanism (design thread T8).
 - `.work/claude-subscription-rotation/spike-05b-piped-login.md` exists and its first line matches `^# Spike 05b .* (PASS|FAIL)$`.
 - `dotnet test` exit 0; `RosterEndpointTests`: add → `Directory.Exists(<profiles>/<sanitized>)`; pause → `RosterFile` round-trips `Paused == true` and the card renders the paused state (exclusion from the ranked queue is asserted by Phase 3's `AccountRankingTests` `Paused` case, since the queue lands at 3.5); remove → folder gone; remove on the live email → 409; adopt-live → roster contains the live email.
 - `ChromiumFamilyBrowserLauncherTests`: recorded arguments equal `["--profile-directory=Profile 3", "<url>"]` for Chrome with profile `Profile 3`.
-- `grep -rln "UseShellExecute = true\|cmd.exe" src/ClaudeCodeAccountRotation.App/Adapters/` prints exactly one path, `src/ClaudeCodeAccountRotation.App/Adapters/Process/ClaudeExecutableLocator.cs` (the documented npm-shim exception); no other adapter shells out.
+- `grep -rn "UseShellExecute = true" src/ClaudeCodeAccountRotation.App/Adapters/` prints nothing, and
+  `grep -rn "cmd.exe" src/ClaudeCodeAccountRotation.App/Adapters/` names `cmd.exe` in code on one
+  line only, `ClaudeExecutableLocator.cs`'s `Path.Combine(directory, "cmd.exe")` (the documented
+  npm-shim exception); every other hit is a comment pointing at that exception. No other adapter
+  shells out.
 - Live acceptance (human): Login for a parked account opens the roster's browser and profile with the email pre-filled; after completion `CLAUDE_CONFIG_DIR=<folder> claude auth status --json | jq -r .email` prints that email and the card leaves "needs login" (the "login expires in N days" card text is 2.6 and is asserted in Phase 2's live acceptance).
 
 ### Phase 5: Packaging, portability, and release [TODO]

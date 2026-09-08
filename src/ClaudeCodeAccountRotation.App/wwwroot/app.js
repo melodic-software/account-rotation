@@ -2,13 +2,19 @@
   "use strict";
 
   var POLL_MS = 10000;
+  var BROWSERS = ["", "chrome", "edge", "brave"];
   var cards = document.getElementById("cards");
   var banner = document.getElementById("banner");
   var warnings = document.getElementById("warnings");
   var captured = document.getElementById("captured");
   var toast = document.getElementById("toast");
+  var addForm = document.getElementById("add");
+  var addEmail = document.getElementById("add-email");
   var toastTimer = null;
-  var switching = false;
+  var busy = false;
+  // The card node per e-mail, rebuilt by each render, so a login panel can be
+  // hung on the right card without querying by an address that needs escaping.
+  var cardNodes = {};
 
   function showToast(text, kind) {
     toast.textContent = text;
@@ -25,7 +31,236 @@
     return node;
   }
 
-  function render(dashboard) {
+  // The alias, browser, and profile-directory fields, built once and used both by
+  // the Add form and by each card's Edit panel, so the two can never drift apart.
+  function accountFields(container, entry) {
+    var values = entry || {};
+    var alias = element("input");
+    alias.type = "text";
+    alias.placeholder = "alias (optional)";
+    alias.value = values.alias || "";
+
+    var browser = element("select");
+    BROWSERS.forEach(function (name) {
+      var option = element("option", null, name === "" ? "no browser mapped" : name);
+      option.value = name;
+      browser.appendChild(option);
+    });
+    browser.value = values.browser || "";
+
+    var profile = element("input");
+    profile.type = "text";
+    profile.placeholder = "browser profile directory, e.g. Profile 3";
+    profile.value = values.browserProfileDirectory || "";
+
+    [alias, browser, profile].forEach(function (field) { container.appendChild(field); });
+    return function () {
+      return {
+        alias: alias.value.trim() || null,
+        browser: browser.value || null,
+        browserProfileDirectory: profile.value.trim() || null
+      };
+    };
+  }
+
+  function send(path, method, body) {
+    var options = {
+      method: method,
+      headers: { "X-Claude-Code-Account-Rotation": "1", "Accept": "application/json" }
+    };
+    if (body) {
+      options.headers["Content-Type"] = "application/json";
+      options.body = JSON.stringify(body);
+    }
+    return fetch(path, options).then(function (response) {
+      return response.json().then(function (payload) { return { ok: response.ok, body: payload }; });
+    });
+  }
+
+  function refused(body) {
+    return "Refused: " + (body.message || body.error || body.refusal || "unknown reason");
+  }
+
+  function mutate(path, method, body, onDone) {
+    busy = true;
+    setButtonsDisabled(true);
+    return send(path, method, body)
+      .then(function (result) {
+        if (onDone) { return onDone(result); }
+        if (!result.ok) { showToast(refused(result.body), "error"); }
+        return null;
+      })
+      .catch(function (error) { showToast("Request failed: " + error, "error"); })
+      .then(function () { busy = false; setButtonsDisabled(false); return refresh(true); });
+  }
+
+  function accountPath(email, suffix) {
+    return "/api/accounts/" + encodeURIComponent(email) + (suffix || "");
+  }
+
+  function switchTo(email) {
+    return mutate(accountPath(email, "/switch"), "POST", null, function (result) {
+      if (!result.ok) {
+        showToast(refused(result.body), "error");
+        return;
+      }
+      var text = "Switched to " + result.body.now;
+      if (result.body.parkedAs) { text += "; parked " + result.body.parkedAs; }
+      if (result.body.identityMismatchWarning) { text += ". The CLI reports " + result.body.cliEmail + "; check /status."; }
+      showToast(text, result.body.identityMismatchWarning ? "warn" : "ok");
+    });
+  }
+
+  function setPaused(email, paused) {
+    return mutate(accountPath(email), "PATCH", { paused: paused }, function (result) {
+      showToast(result.ok ? (paused ? email + " is out of the rotation" : email + " is back in the rotation") : refused(result.body), result.ok ? "ok" : "error");
+    });
+  }
+
+  function adopt(email) {
+    return mutate(accountPath(email, "/adopt-live"), "POST", null, function (result) {
+      showToast(result.ok ? email + " is on the roster" : refused(result.body), result.ok ? "ok" : "error");
+    });
+  }
+
+  function remove(email) {
+    if (!window.confirm("Remove " + email + "? Its login is revoked and its profile folder is deleted.")) {
+      return Promise.resolve();
+    }
+    return mutate(accountPath(email), "DELETE", null, function (result) {
+      if (result.ok) {
+        showToast(email + " removed" + (result.body.warning ? ". " + result.body.warning : " and logged out"), result.body.warning ? "warn" : "ok");
+        return null;
+      }
+      // The delete is refused rather than stranding a token the tool believes it
+      // revoked. Deleting anyway is the operator's call, and it is said plainly.
+      if (result.body.refusal === "LogoutFailed" && window.confirm(result.body.message + "\n\nDelete the folder anyway, without revoking?")) {
+        return send(accountPath(email) + "?logout=false", "DELETE", null).then(function (forced) {
+          showToast(forced.ok ? email + " removed. " + forced.body.warning : refused(forced.body), forced.ok ? "warn" : "error");
+        });
+      }
+      showToast(refused(result.body), "error");
+      return null;
+    });
+  }
+
+  // Login is not routed through mutate: mutate ends in a forced render, which
+  // rebuilds every card and would throw away the panel this just opened.
+  function startLogin(email) {
+    busy = true;
+    setButtonsDisabled(true);
+    return send(accountPath(email, "/login"), "POST", null)
+      .then(function (result) {
+        if (!result.ok) {
+          showToast(refused(result.body), "error");
+          return null;
+        }
+        openLoginPanel(email, result.body);
+        return null;
+      })
+      .catch(function (error) { showToast("Request failed: " + error, "error"); })
+      .then(function () { busy = false; setButtonsDisabled(false); });
+  }
+
+  function openLoginPanel(email, session) {
+    var card = cardNodes[email];
+    if (!card) { return; }
+
+    var panel = element("details", "login");
+    panel.open = true;
+    panel.appendChild(element("summary", null, "Signing " + email + " in"));
+
+    var link = element("a", null, "Open the sign-in page");
+    link.href = session.signInUrl;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    panel.appendChild(link);
+
+    if (session.browserError) {
+      panel.appendChild(element("p", "muted", "The mapped browser did not open: " + session.browserError + " Use the link above."));
+    }
+
+    var status = element("p", "muted", "Sign in, then paste the code that page shows. This login expires in ten minutes.");
+    panel.appendChild(status);
+
+    var form = element("form", "roster-form");
+    var code = element("input");
+    code.type = "text";
+    code.autocomplete = "off";
+    code.placeholder = "paste the code here";
+    var submit = element("button", null, "Submit code");
+    submit.type = "submit";
+    form.appendChild(code);
+    form.appendChild(submit);
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      submitCode(session.id, email, code, status, panel);
+    });
+    panel.appendChild(form);
+
+    card.appendChild(panel);
+    code.focus();
+  }
+
+  function submitCode(id, email, field, status, panel) {
+    var code = field.value.trim();
+    if (!code) { return Promise.resolve(); }
+    busy = true;
+    setButtonsDisabled(true);
+    status.textContent = "Checking that code...";
+    // The code travels in the body. It is never part of a path, and the reply
+    // never carries it back.
+    return send("/api/login-sessions/" + encodeURIComponent(id) + "/code", "POST", { code: code })
+      .then(function (result) {
+        field.value = "";
+        if (!result.ok) {
+          status.textContent = refused(result.body);
+          return null;
+        }
+        if (result.body.state !== "Completed") {
+          // A rejected code leaves the session open, so the field stays for another try.
+          status.textContent = result.body.message || "Still waiting on the sign-in page.";
+          return null;
+        }
+        panel.parentNode.removeChild(panel);
+        showToast(result.body.message || (email + " is logged in"), "ok");
+        return refresh(true);
+      })
+      .catch(function (error) { status.textContent = "Request failed: " + error; })
+      .then(function () { busy = false; setButtonsDisabled(false); });
+  }
+
+  function editPanel(account) {
+    var panel = element("details", "edit");
+    panel.appendChild(element("summary", null, "Edit"));
+    var form = element("form", "roster-form");
+    var read = accountFields(form, account.roster);
+    var save = element("button", null, "Save");
+    save.type = "submit";
+    form.appendChild(save);
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      panel.open = false;
+      mutate(accountPath(account.email), "PATCH", read(), function (result) {
+        showToast(result.ok ? account.email + " updated" : refused(result.body), result.ok ? "ok" : "error");
+      });
+    });
+    panel.appendChild(form);
+    return panel;
+  }
+
+  function actionButton(label, className, onClick) {
+    var button = element("button", className, label);
+    button.type = "button";
+    button.addEventListener("click", onClick);
+    return button;
+  }
+
+  function render(dashboard, force) {
+    // Rendering rebuilds every card, so the ten-second poll would otherwise wipe an
+    // Edit panel, or a half-typed login code, out from under whoever is typing it.
+    // A mutation's own render passes force, since that one has to show the result.
+    if (!force && cards.querySelector("details.edit[open], details.login[open]")) { return; }
     captured.textContent = "as of " + new Date(dashboard.capturedAt).toLocaleTimeString();
     banner.hidden = !dashboard.banner;
     banner.textContent = dashboard.banner || "";
@@ -34,56 +269,86 @@
     dashboard.warnings.forEach(function (warning) { warnings.appendChild(element("li", null, warning)); });
 
     cards.innerHTML = "";
+    cardNodes = {};
     dashboard.accounts.forEach(function (account) {
-      var card = element("section", "card" + (account.isLive ? " live" : ""));
-      card.appendChild(element("h2", null, account.email));
+      var roster = account.roster;
+      var paused = !!(roster && roster.paused);
+      var card = element("section", "card" + (account.isLive ? " live" : "") + (paused ? " paused" : ""));
+      card.appendChild(element("h2", null, (roster && roster.alias) ? roster.alias + " (" + account.email + ")" : account.email));
+
       var badges = element("div", "badges");
       if (account.isLive) { badges.appendChild(element("span", "badge live", "live")); }
+      if (paused) { badges.appendChild(element("span", "badge paused", "paused")); }
       if (!account.hasCredentials && !account.isLive) { badges.appendChild(element("span", "badge needs-login", "needs login")); }
+      if (!roster) { badges.appendChild(element("span", "badge off-roster", "not on roster")); }
       card.appendChild(badges);
-      var button = element("button", "switch", account.isLive ? "Live now" : "Switch");
-      button.disabled = account.isLive || !account.hasCredentials || switching || !!dashboard.banner;
-      button.addEventListener("click", function () { switchTo(account.email); });
-      card.appendChild(button);
+
+      if (roster && roster.browser) {
+        card.appendChild(element("p", "muted", roster.browser + (roster.browserProfileDirectory ? " / " + roster.browserProfileDirectory : "")));
+      }
+
+      var actions = element("div", "actions");
+      var switchButton = actionButton(account.isLive ? "Live now" : "Switch", "switch", function () { switchTo(account.email); });
+      // A paused account is out of the ranked queue, not off the page: the operator
+      // can still switch to it by hand.
+      switchButton.disabled = account.isLive || !account.hasCredentials || busy || !!dashboard.banner;
+      actions.appendChild(switchButton);
+
+      if (roster) {
+        actions.appendChild(actionButton(paused ? "Resume" : "Pause", "secondary", function () { setPaused(account.email, !paused); }));
+      } else if (account.isLive) {
+        actions.appendChild(actionButton("Adopt", "secondary", function () { adopt(account.email); }));
+      }
+
+      // The live account is signed in already; logging it into its parked folder
+      // would leave one account holding two logins.
+      if (roster && !account.isLive) {
+        actions.appendChild(actionButton(
+          account.hasCredentials ? "Log in again" : "Login",
+          "secondary",
+          function () { startLogin(account.email); }));
+      }
+
+      if (!account.isLive) {
+        actions.appendChild(actionButton("Remove", "danger", function () { remove(account.email); }));
+      }
+
+      card.appendChild(actions);
+      if (roster) { card.appendChild(editPanel(account)); }
+      cardNodes[account.email] = card;
       cards.appendChild(card);
     });
   }
 
-  function refresh() {
+  function refresh(force) {
     return fetch("/api/dashboard", { headers: { "Accept": "application/json" } })
       .then(function (response) { return response.json(); })
-      .then(render)
+      .then(function (dashboard) { render(dashboard, force); })
       .catch(function (error) { showToast("Dashboard unavailable: " + error, "error"); });
   }
 
-  function disableSwitchButtons() {
-    // Synchronously, at click time: the next render re-enables per account state. A
-    // second click during the lock wait would otherwise send a second POST whose
-    // refusal toast overwrote the outcome of the first.
-    Array.prototype.forEach.call(cards.querySelectorAll("button.switch"), function (button) { button.disabled = true; });
+  function setButtonsDisabled(disabled) {
+    // Synchronously, at click time: a second click during the lock wait would
+    // otherwise send a second request whose refusal toast overwrote the outcome of
+    // the first. The re-enable is unconditional and the following render applies
+    // the per-account state, so a failed request can never leave a button dead.
+    Array.prototype.forEach.call(document.querySelectorAll("button"), function (button) { button.disabled = disabled; });
   }
 
-  function switchTo(email) {
-    switching = true;
-    disableSwitchButtons();
-    fetch("/api/accounts/" + encodeURIComponent(email) + "/switch", {
-      method: "POST",
-      headers: { "X-Claude-Code-Account-Rotation": "1", "Accept": "application/json" }
-    })
-      .then(function (response) { return response.json().then(function (body) { return { ok: response.ok, body: body }; }); })
-      .then(function (result) {
-        if (result.ok) {
-          var text = "Switched to " + result.body.now;
-          if (result.body.parkedAs) { text += "; parked " + result.body.parkedAs; }
-          if (result.body.identityMismatchWarning) { text += ". The CLI reports " + result.body.cliEmail + "; check /status."; }
-          showToast(text, result.body.identityMismatchWarning ? "warn" : "ok");
-        } else {
-          showToast("Refused: " + (result.body.message || result.body.error || result.body.refusal), "error");
-        }
-      })
-      .catch(function (error) { showToast("Switch failed: " + error, "error"); })
-      .then(function () { switching = false; return refresh(); });
-  }
+  var readAddFields = accountFields(document.getElementById("add-fields"), null);
+  addForm.addEventListener("submit", function (event) {
+    event.preventDefault();
+    var body = readAddFields();
+    body.email = addEmail.value.trim();
+    mutate("/api/accounts", "POST", body, function (result) {
+      if (result.ok) {
+        addForm.reset();
+        showToast(body.email + " added; it needs a login before it can be switched to", "ok");
+      } else {
+        showToast(refused(result.body), "error");
+      }
+    });
+  });
 
   refresh();
   setInterval(refresh, POLL_MS);

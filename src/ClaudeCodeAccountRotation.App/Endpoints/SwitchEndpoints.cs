@@ -72,6 +72,7 @@ internal static class SwitchEndpoints
         SwitchRefusal.ManagedPolicyUnreadable => "A device-managed login policy exists but could not be read; switching stays off until it can be.",
         SwitchRefusal.LiveIdentityUnverified => "The live identity could not be verified; see the banner.",
         SwitchRefusal.MutationInProgress => "Another credential change is in progress.",
+        SwitchRefusal.LoginInProgress => "A login is running against one of those folders; finish it or let it expire first.",
         _ => refusal.ToString(),
     };
 }

@@ -1,7 +1,10 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
+using ClaudeCodeAccountRotation.Core.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeCodeAccountRotation.App.Tests.Endpoints;
 
@@ -72,6 +75,37 @@ public sealed class SwitchEndpointTests
         using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
         using HttpClient client = factory.CreateMutatingClient();
         client.DefaultRequestHeaders.Add("Origin", "https://evil.example");
+
+        using HttpResponseMessage response = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.Forbidden);
+    }
+
+    [Fact]
+    public async Task TheOriginIsMeasuredAgainstTheConfiguredListenAddressAndNotAgainstTheRequestsOwnHost()
+    {
+        // Deriving the expected origin from the request compares two values the same
+        // request supplies, so a rebound name arriving in both would match itself.
+        // This client's Host is the test server's, and its Origin is this instance's
+        // real address: only a filter that reads the configuration lets it through.
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        int port = factory.Services.GetRequiredService<ClaudeCodeAccountRotationConfiguration>().ListenPort;
+        using HttpClient client = factory.CreateMutatingClient();
+        client.DefaultRequestHeaders.Add("Origin", "http://127.0.0.1:" + port.ToString(CultureInfo.InvariantCulture));
+
+        using HttpResponseMessage response = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task ALoopbackOriginOnAnotherPortIsForbidden()
+    {
+        // Another local page is another origin; only this instance's own port is it.
+        using AppFactory factory = await LiveOnAWithParkedBAsync(TestContext.Current.CancellationToken);
+        int port = factory.Services.GetRequiredService<ClaudeCodeAccountRotationConfiguration>().ListenPort;
+        using HttpClient client = factory.CreateMutatingClient();
+        client.DefaultRequestHeaders.Add("Origin", "http://localhost:" + (port + 1).ToString(CultureInfo.InvariantCulture));
 
         using HttpResponseMessage response = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
 

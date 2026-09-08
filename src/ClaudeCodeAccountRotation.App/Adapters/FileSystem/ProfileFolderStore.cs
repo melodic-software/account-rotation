@@ -56,9 +56,12 @@ internal sealed class ProfileFolderStore
         return profiles;
     }
 
+    /// <summary>Where an account's folder sits, whether or not it exists yet.</summary>
+    public string FolderPathFor(AccountEmail email) => Path.Combine(_profilesRoot, ProfileFolderName.FromEmail(email));
+
     public async Task<ParkedProfile> EnsureFolderAsync(AccountEmail email, CancellationToken cancellationToken)
     {
-        string folder = Path.Combine(_profilesRoot, ProfileFolderName.FromEmail(email));
+        string folder = FolderPathFor(email);
         Directory.CreateDirectory(folder);
         _discovered[folder] = 0;
         OAuthAccountBlock? account = await ReadAccountInFolderAsync(folder, cancellationToken);
@@ -126,6 +129,33 @@ internal sealed class ProfileFolderStore
     public Task<OAuthAccountBlock?> ReadAccountAsync(string folderPath, CancellationToken cancellationToken) =>
         ReadAccountInFolderAsync(UnderRoot(folderPath), cancellationToken);
 
+    /// <summary>
+    /// Takes a completed login's word for who a folder holds: rewrites
+    /// <c>profile.json</c> from the state file the login just wrote, and only
+    /// then prunes the residue. The order is the point. A folder logged in a
+    /// second time as another account still carries the first login's
+    /// <c>profile.json</c>, and pruning first would delete the only fresh copy
+    /// of the identity and leave the stale one standing.
+    /// </summary>
+    /// <returns>
+    /// False when the state file names no account, in which case nothing is
+    /// written and nothing is pruned: a folder whose only identity is the one
+    /// already on disk is left exactly as the login left it.
+    /// </returns>
+    public async Task<bool> AdoptFreshLoginAsync(string folderPath, CancellationToken cancellationToken)
+    {
+        string folder = UnderRoot(folderPath);
+        _discovered[folder] = 0;
+        if (await ReadStateFileAccountAsync(folder, cancellationToken) is not OAuthAccountBlock fresh)
+        {
+            return false;
+        }
+
+        await AtomicJsonFile.WriteAsync(Path.Combine(folder, ProfileFileName), fresh.Raw, cancellationToken);
+        await PruneLoginResidueAsync(folder, cancellationToken);
+        return true;
+    }
+
     private static bool HasCredentials(string folder) =>
         File.Exists(Path.Combine(folder, FileSystemCredentialPairStore.FileName));
 
@@ -137,15 +167,21 @@ internal sealed class ProfileFolderStore
             return await ReadObjectAsync(profilePath, cancellationToken) is JsonObject profile ? OAuthAccountBlock.FromJson(profile) : null;
         }
 
+        return await ReadStateFileAccountAsync(folder, cancellationToken);
+    }
+
+    /// <summary>The <c>oauthAccount</c> block of the folder's own state file, ignoring any profile beside it.</summary>
+    private static async Task<OAuthAccountBlock?> ReadStateFileAccountAsync(string folder, CancellationToken cancellationToken)
+    {
         string statePath = Path.Combine(folder, StateFileName);
-        if (File.Exists(statePath))
+        if (!File.Exists(statePath))
         {
-            return await ReadObjectAsync(statePath, cancellationToken) is JsonObject state && state["oauthAccount"] is JsonObject block
-                ? OAuthAccountBlock.FromJson(block)
-                : null;
+            return null;
         }
 
-        return null;
+        return await ReadObjectAsync(statePath, cancellationToken) is JsonObject state && state["oauthAccount"] is JsonObject block
+            ? OAuthAccountBlock.FromJson(block)
+            : null;
     }
 
     private static async Task<JsonObject?> ReadObjectAsync(string path, CancellationToken cancellationToken)

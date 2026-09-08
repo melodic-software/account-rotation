@@ -14,6 +14,15 @@
   </header>
   <div id="banner" class="banner" hidden></div>
   <ul id="warnings" class="warnings" hidden></ul>
+  <details class="roster-add">
+    <summary>Add an account</summary>
+    <form id="add" class="roster-form">
+      <label for="add-email">E-mail</label>
+      <input id="add-email" name="email" type="email" required autocomplete="off" placeholder="you@example.com">
+      <div id="add-fields"></div>
+      <button type="submit">Add</button>
+    </form>
+  </details>
   <main id="cards" class="cards" aria-live="polite"></main>
   <div id="toast" class="toast" role="status" hidden></div>
   <script src="/app.js"></script>

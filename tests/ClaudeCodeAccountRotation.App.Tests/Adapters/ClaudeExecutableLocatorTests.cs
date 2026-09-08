@@ -74,6 +74,37 @@ public sealed class ClaudeExecutableLocatorTests : IDisposable
     }
 
     [Fact]
+    public void AnArgumentHoldingACommandSeparatorIsOneQuotedOperandNotASecondCommand()
+    {
+        // The e-mail allowlist refuses this address at the boundary. This asserts what
+        // happens if one ever reaches the interpreter anyway: "&" inside quotes is a
+        // character of the operand, and cmd.exe runs one command, not three.
+        string shimPath = Path.Combine(_root, "npm", "claude.cmd");
+        ClaudeExecutable shim = new(Path.Combine(_root, "cmd.exe"), [], Shim: shimPath);
+
+        string commandLine = shim.StartInfo(["auth", "login", "--email", "a&whoami&b@x.com"], configDirectory: null).Arguments;
+
+        commandLine.ShouldBe("/d /s /c \"\"" + shimPath + "\" \"auth\" \"login\" \"--email\" \"a&whoami&b@x.com\"\"");
+        // The address sits between one quote and the next, so neither "&" is ever
+        // the interpreter's separator.
+        commandLine.ShouldContain("\"a&whoami&b@x.com\"");
+    }
+
+    [Theory]
+    [InlineData("%PATH%")]
+    [InlineData("a\"b@x.com")]
+    public void AnArgumentThatQuotingCannotNeutralizeIsRefusedRatherThanPassed(string argument)
+    {
+        // Quotes stop the separators; they stop neither environment expansion nor a
+        // quote of the argument's own, so those never reach the command line at all.
+        ClaudeExecutable shim = new(Path.Combine(_root, "cmd.exe"), [], Shim: Path.Combine(_root, "npm", "claude.cmd"));
+
+        ArgumentException thrown = Should.Throw<ArgumentException>(() => shim.StartInfo(["auth", "login", "--email", argument], configDirectory: null));
+
+        thrown.Message.ShouldNotContain(argument);
+    }
+
+    [Fact]
     public void NothingResolvableIsRefusedWithGuidance()
     {
         Result<ClaudeExecutable, string> result = ClaudeExecutableLocator.Locate(null, Path.Combine(_root, "empty"), isWindows: true);

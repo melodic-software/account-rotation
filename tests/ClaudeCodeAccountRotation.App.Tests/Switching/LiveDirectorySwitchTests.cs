@@ -51,7 +51,11 @@ public sealed class LiveDirectorySwitchTests : IDisposable
         return folder;
     }
 
-    private LiveDirectorySwitch Switch(TimeSpan? lockWait = null, TimeSpan? gateTimeout = null, ICredentialPairStore? pairs = null)
+    private LiveDirectorySwitch Switch(
+        TimeSpan? lockWait = null,
+        TimeSpan? gateTimeout = null,
+        ICredentialPairStore? pairs = null,
+        ILoginSessionRunner? logins = null)
     {
         SwitchOptions options = new(_liveDirectory, _stateFilePath, _profilesRoot, _appData, lockWait ?? TimeSpan.FromSeconds(2), gateTimeout ?? TimeSpan.FromMilliseconds(200));
         return new LiveDirectorySwitch(
@@ -60,6 +64,7 @@ public sealed class LiveDirectorySwitchTests : IDisposable
             new ProfileFolderStore(_profilesRoot),
             new SwitchJournal(_appData),
             _gate,
+            logins ?? new NoLoginRunning(),
             _cli,
             new ManagedLoginPolicyReader(Path.Combine(_root, "managed-settings.json"), static () => null, static () => null),
             options,
@@ -146,6 +151,40 @@ public sealed class LiveDirectorySwitchTests : IDisposable
         Result<SwitchOutcome, SwitchRefusal> result = await Switch().SwitchToAsync(Email("nobody@example.com"), TestContext.Current.CancellationToken);
 
         result.Error.ShouldBe(SwitchRefusal.TargetHasNoCredentials);
+    }
+
+    [Fact]
+    public async Task SwitchRefusesToUnparkAFolderALoginIsRunningAgainst()
+    {
+        // The login child writes a fresh pair into that folder at a moment nothing
+        // here chooses. Unparking the old pair out from under it leaves the account
+        // holding two: the one now live, and the one the login writes afterwards.
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        string folder = await ParkedProfileAsync("b@example.com", "refresh-b");
+
+        Result<SwitchOutcome, SwitchRefusal> result =
+            await Switch(logins: new NoLoginRunning(folder)).SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken);
+
+        result.Error.ShouldBe(SwitchRefusal.LoginInProgress);
+        (await CredentialFiles.FingerprintAsync(_liveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
+        (await CredentialFiles.FingerprintAsync(folder, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-b").Fingerprint);
+    }
+
+    [Fact]
+    public async Task SwitchRefusesToParkIntoAFolderALoginIsRunningAgainst()
+    {
+        // The other direction: the outgoing account's folder is the one being written.
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        await ParkedProfileAsync("b@example.com", "refresh-b");
+        string outgoingFolder = Path.Combine(_profilesRoot, "a@example.com");
+
+        Result<SwitchOutcome, SwitchRefusal> result =
+            await Switch(logins: new NoLoginRunning(outgoingFolder)).SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken);
+
+        result.Error.ShouldBe(SwitchRefusal.LoginInProgress);
+        (await CredentialFiles.FingerprintAsync(_liveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
     }
 
     [Fact]
@@ -650,6 +689,21 @@ public sealed class LiveDirectorySwitchTests : IDisposable
         public Task<Result<IAsyncDisposable, string>> AcquireRefreshLockAsync(TimeSpan waitBound, CancellationToken cancellationToken) => inner.AcquireRefreshLockAsync(waitBound, cancellationToken);
 
         public string? FreshLockFileName(TimeSpan maxAge) => inner.FreshLockFileName(maxAge);
+    }
+
+    /// <summary>A runner that owns the folders named, and none other.</summary>
+    private sealed class NoLoginRunning(params string[] folders) : ILoginSessionRunner
+    {
+        public Task<Result<LoginSession, string>> StartAsync(AccountEmail email, string folderPath, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<Result<LoginSession, string>> SubmitCodeAsync(LoginSessionId id, string code, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public LoginSession? Status(LoginSessionId id) => null;
+
+        public bool IsRunningAgainst(string folderPath) =>
+            folders.Contains(Path.GetFullPath(folderPath), StringComparer.OrdinalIgnoreCase);
     }
 
     private sealed class CannedAuthStatus : IClaudeCliAuthStatus

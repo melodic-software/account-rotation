@@ -77,9 +77,14 @@ header h1 { margin: 0; font-size: 1.6rem; letter-spacing: 0.01em; }
 }
 .badge.live { color: var(--live); }
 .badge.needs-login { color: var(--warn); }
+.badge.paused { color: var(--muted); }
+.badge.off-roster { color: var(--accent); }
 
-button.switch {
-  align-self: flex-start;
+.card.paused { opacity: 0.75; }
+
+.actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+
+button {
   padding: 0.5rem 1rem;
   border-radius: 6px;
   border: 1px solid var(--accent);
@@ -88,7 +93,32 @@ button.switch {
   font: inherit;
   cursor: pointer;
 }
-button.switch:disabled { opacity: 0.45; cursor: default; }
+button:disabled { opacity: 0.45; cursor: default; }
+button.secondary { background: transparent; color: var(--accent); }
+button.danger { background: transparent; border-color: var(--error); color: var(--error); }
+
+.roster-add { margin-top: 1.5rem; }
+.roster-add > summary, .card details.edit > summary, .card details.login > summary { cursor: pointer; color: var(--muted); }
+.card details.login { margin-top: 0.75rem; }
+.card details.login a { color: var(--accent); }
+
+.roster-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  max-width: 32rem;
+}
+.roster-form label { font-size: 0.85rem; color: var(--muted); }
+.roster-form input, .roster-form select {
+  padding: 0.45rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+}
+.roster-form button { align-self: flex-start; }
 
 .toast {
   position: fixed;

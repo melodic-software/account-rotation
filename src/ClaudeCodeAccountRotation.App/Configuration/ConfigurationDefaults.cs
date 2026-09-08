@@ -51,6 +51,9 @@ internal static class ConfigurationDefaults
             DefaultListenPort,
             DefaultRefreshLockWaitBound,
             ClaudeExecutable: null,
-            ProductToken);
+            ProductToken,
+            // No override until the operator writes one: the launcher looks in the
+            // platform's known install locations first.
+            System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty);
     }
 }
