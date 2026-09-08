@@ -12,6 +12,7 @@ using ClaudeCodeAccountRotation.Core.Configuration;
 using ClaudeCodeAccountRotation.Core.Ports;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.HostFiltering;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
@@ -118,6 +119,10 @@ internal static class AppComposition
 
         // Loopback only: the page is a local control surface, never a network service.
         builder.WebHost.ConfigureKestrel(kestrel => kestrel.ListenLocalhost(configuration.ListenPort));
+        // The framework's own host filter, ahead of everything of ours: a request
+        // carrying a rebound name is refused before the pipeline reaches a route.
+        // Set here rather than left to configuration, whose default is "*".
+        services.Configure<HostFilteringOptions>(static options => options.AllowedHosts = ["localhost", "127.0.0.1", "[::1]"]);
         return Result<Unit, string>.Success(Unit.Value);
     }
 
