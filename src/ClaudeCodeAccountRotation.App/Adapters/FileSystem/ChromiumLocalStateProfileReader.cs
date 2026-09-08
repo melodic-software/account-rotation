@@ -154,8 +154,16 @@ internal sealed class ChromiumLocalStateProfileReader : IBrowserProfileReader
             ? AccountEmail.Parse(address).Match(static parsed => (AccountEmail?)parsed, static _ => null)
             : null;
 
+    /// <summary>
+    /// A string this file carries, or null when it carries nothing usable.
+    /// Blank counts as nothing: an empty name would render an option the
+    /// operator cannot read, and an empty address is not an address.
+    /// </summary>
     private static string? Text(JsonElement element, string name) =>
-        element.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.String
-            ? value.GetString()
+        element.TryGetProperty(name, out JsonElement value)
+        && value.ValueKind == JsonValueKind.String
+        && value.GetString() is string text
+        && !string.IsNullOrWhiteSpace(text)
+            ? text
             : null;
 }

@@ -87,10 +87,15 @@ public sealed class ChromiumLocalStateProfileReaderTests : IDisposable
         profiles[0].SignedInAs.ShouldBeNull();
     }
 
-    [Fact]
-    public async Task AProfileWithoutANameFallsBackToItsDirectory()
+    [Theory]
+    // A blank name is no name: it would render an option nobody can read, and
+    // the directory is the one thing every profile certainly has.
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task AProfileWithoutAUsableNameFallsBackToItsDirectory(string? name)
     {
-        await WriteAsync(BrowserFamily.Chrome, LocalState(("Profile 7", null, null)));
+        await WriteAsync(BrowserFamily.Chrome, LocalState(("Profile 7", name, null)));
 
         (await Reader().ReadAsync(TestContext.Current.CancellationToken))[0].Name.ShouldBe("Profile 7");
     }
