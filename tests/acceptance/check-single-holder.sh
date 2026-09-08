@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Proves the single-holder invariant on a real machine: every refresh token
-# across the live credential file and every parked profile exists in exactly
-# one file. Prints `files=N distinct=N duplicates=0` and exits 0; any duplicate
-# lineage is listed and the exit code is 1. Reads the files, prints only
-# SHA-256 fingerprints, never a token.
+# across the live credential file, every parked profile, and every dotfile
+# temp beside them (a crash between a write and its rename, including a
+# state-file write stranded at the home root) exists in exactly one file.
+# Prints `files=N distinct=N duplicates=0 unreadable=0` and exits 0; any
+# duplicate lineage is listed and the exit code is 1, and a temp too damaged
+# to parse is counted as unreadable rather than silently skipped. Reads the
+# files, prints only SHA-256 fingerprints, never a token.
 #
 # Usage: check-single-holder.sh <profiles-root> <live-dir>
 set -euo pipefail
@@ -18,22 +21,56 @@ live_dir="$2"
 credential_file=".credentials.json"
 
 fingerprint() {
-  # jq -j prints the raw token without a trailing newline; only its hash leaves this function.
-  jq -j '.claudeAiOauth.refreshToken // empty' -- "$1" | sha256sum | cut -c1-64
+  # jq -j prints the raw token without a trailing newline; only its hash
+  # leaves this function. A parse failure on truncated or invalid JSON
+  # propagates as a non-zero exit through pipefail, which the caller treats
+  # as unreadable rather than as an empty token.
+  jq -j '.claudeAiOauth.refreshToken // empty' -- "$1" 2>/dev/null | sha256sum | cut -c1-64
+}
+
+# Any dotfile ending in .tmp beside a directory's credential or state file is
+# a write a crash stopped before its rename landed; it can hold a full
+# credential pair and is fingerprinted exactly like a settled file so a
+# duplicate cannot hide behind a temp name.
+collect_temps() {
+  local dir="$1" entry
+  [[ -d "$dir" ]] || return 0
+  while IFS= read -r -d '' entry; do
+    files+=("$entry")
+  done < <(find "$dir" -maxdepth 1 -name '.*.tmp' -type f -print0 | sort -z)
 }
 
 declare -a files=()
 [[ -f "$live_dir/$credential_file" ]] && files+=("$live_dir/$credential_file")
+collect_temps "$live_dir"
+
+# The state file's own temp lands at the home root when CLAUDE_CONFIG_DIR is
+# unset, outside every root the app's own startup sweep covers. It holds no
+# refresh token, so it fingerprints empty and only ever adds a "no refresh
+# token" line below, never a duplicate.
+home_root="${HOME:-}"
+if [[ -n "$home_root" ]] && ! [[ "$home_root" -ef "$live_dir" ]]; then
+  collect_temps "$home_root"
+fi
+
 if [[ -d "$profiles_root" ]]; then
   while IFS= read -r -d '' file; do
     files+=("$file")
   done < <(find "$profiles_root" -mindepth 2 -maxdepth 2 -name "$credential_file" -type f -print0 | sort -z)
+  while IFS= read -r -d '' dir; do
+    collect_temps "$dir"
+  done < <(find "$profiles_root" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
 fi
 
 declare -A holders=()
 duplicates=0
+unreadable=0
 for file in "${files[@]}"; do
-  hash="$(fingerprint "$file")"
+  if ! hash="$(fingerprint "$file")"; then
+    echo "unreadable $file" >&2
+    unreadable=$((unreadable + 1))
+    continue
+  fi
   if [[ -z "$hash" || "$hash" == "$(printf '' | sha256sum | cut -c1-64)" ]]; then
     echo "no refresh token in $file" >&2
     continue
@@ -46,5 +83,5 @@ for file in "${files[@]}"; do
   fi
 done
 
-echo "files=${#files[@]} distinct=${#holders[@]} duplicates=$duplicates"
-[[ "$duplicates" -eq 0 ]]
+echo "files=${#files[@]} distinct=${#holders[@]} duplicates=$duplicates unreadable=$unreadable"
+[[ "$duplicates" -eq 0 && "$unreadable" -eq 0 ]]
