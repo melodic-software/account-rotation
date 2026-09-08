@@ -88,7 +88,7 @@
         return null;
       })
       .catch(function (error) { showToast("Request failed: " + error, "error"); })
-      .then(function () { busy = false; setButtonsDisabled(false); return refresh(); });
+      .then(function () { busy = false; setButtonsDisabled(false); return refresh(true); });
   }
 
   function accountPath(email, suffix) {
@@ -151,6 +151,7 @@
     form.appendChild(save);
     form.addEventListener("submit", function (event) {
       event.preventDefault();
+      panel.open = false;
       mutate(accountPath(account.email), "PATCH", read(), function (result) {
         showToast(result.ok ? account.email + " updated" : refused(result.body), result.ok ? "ok" : "error");
       });
@@ -166,7 +167,11 @@
     return button;
   }
 
-  function render(dashboard) {
+  function render(dashboard, force) {
+    // Rendering rebuilds every card, so the ten-second poll would otherwise wipe an
+    // Edit panel out from under whoever is typing in it. A mutation's own render
+    // passes force, since that one has to show the result.
+    if (!force && cards.querySelector("details.edit[open]")) { return; }
     captured.textContent = "as of " + new Date(dashboard.capturedAt).toLocaleTimeString();
     banner.hidden = !dashboard.banner;
     banner.textContent = dashboard.banner || "";
@@ -215,10 +220,10 @@
     });
   }
 
-  function refresh() {
+  function refresh(force) {
     return fetch("/api/dashboard", { headers: { "Accept": "application/json" } })
       .then(function (response) { return response.json(); })
-      .then(render)
+      .then(function (dashboard) { render(dashboard, force); })
       .catch(function (error) { showToast("Dashboard unavailable: " + error, "error"); });
   }
 
