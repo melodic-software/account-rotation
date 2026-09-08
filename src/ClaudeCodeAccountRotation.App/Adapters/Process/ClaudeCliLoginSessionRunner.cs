@@ -1,9 +1,11 @@
 using System.Collections.Concurrent;
 using System.Text;
 using System.Text.RegularExpressions;
+using ClaudeCodeAccountRotation.App.Accounts;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core;
+using ClaudeCodeAccountRotation.Core.Accounts;
 using ClaudeCodeAccountRotation.Core.Identity;
 using ClaudeCodeAccountRotation.Core.Ports;
 
@@ -43,10 +45,27 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     private const string EndedMessage = "The login ended without writing a credential file. Start it again.";
     private const string ResidueKeptMessage = "The login wrote credentials but named no account, so the folder was left exactly as it is.";
 
+    private const string RefusedPrefix = "That login was refused: ";
+    private const string UnreadableTierReason =
+        "the CLI did not report what kind of account signed in, and a tier that cannot be read is refused rather than admitted";
+    private const string RevokedSuffix =
+        ". The credentials it wrote were revoked with `claude auth logout` and deleted, so nothing joined the rotation."
+        + " Log in again and pick the Max account at the sign-in step.";
+    private const string NotRevokedSuffix =
+        ". The credentials it wrote were deleted but could not be revoked, so that refresh token stays valid until its login expires."
+        + " Log in again and pick the Max account at the sign-in step.";
+    private const string NotDeletedSuffix =
+        ". The credentials it wrote could not be deleted; remove the account from the roster before switching to anything.";
+    private const string UnjudgedMessage =
+        "Another credential change held the lock, so what kind of account signed in could not be checked."
+        + " Remove the account from the roster, which revokes that login, before switching to it.";
+
     private readonly LoginChildFactory _start;
     private readonly ProfileFolderStore _profiles;
     private readonly ClaudeStateFile _stateFile;
     private readonly CredentialMutationGate _gate;
+    private readonly IClaudeCliAuthStatus _authStatus;
+    private readonly IClaudeCliLogout _logout;
     private readonly TimeProvider _clock;
     private readonly ConcurrentDictionary<string, Session> _sessions = new(StringComparer.Ordinal);
 
@@ -55,17 +74,23 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
         ProfileFolderStore profiles,
         ClaudeStateFile stateFile,
         CredentialMutationGate gate,
+        IClaudeCliAuthStatus authStatus,
+        IClaudeCliLogout logout,
         TimeProvider clock)
     {
         ArgumentNullException.ThrowIfNull(start);
         ArgumentNullException.ThrowIfNull(profiles);
         ArgumentNullException.ThrowIfNull(stateFile);
         ArgumentNullException.ThrowIfNull(gate);
+        ArgumentNullException.ThrowIfNull(authStatus);
+        ArgumentNullException.ThrowIfNull(logout);
         ArgumentNullException.ThrowIfNull(clock);
         _start = start;
         _profiles = profiles;
         _stateFile = stateFile;
         _gate = gate;
+        _authStatus = authStatus;
+        _logout = logout;
         _clock = clock;
     }
 
@@ -349,15 +374,44 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
         // way the tidy-up can fail is caught here: a fault escaping would leave the
         // session pending behind a killed child until its expiry, and the operator
         // watching a completed login say "still waiting" for ten minutes.
-        bool adopted;
         try
         {
+            // The whole of it under one permit. Judging the tier and then revoking
+            // it are two CLI runs, and a switch that slipped between them would take
+            // the very pair being refused.
             using IDisposable permit = await _gate.AcquireAsync(_gateWait, CancellationToken.None);
-            adopted = await _profiles.AdoptFreshLoginAsync(session.Folder, CancellationToken.None);
+            (LoginSessionState state, string message) = await AdmitAsync(session);
+            Settle(session, state, message);
         }
         catch (TimeoutException)
         {
-            adopted = false;
+            // Nothing may move, revoke, or delete what is in a folder without the
+            // gate, so an unjudged pair is left exactly where it is and the operator
+            // is told to remove the account rather than switch to it.
+            Settle(session, LoginSessionState.Failed, UnjudgedMessage);
+        }
+    }
+
+    /// <summary>
+    /// Adopts the fresh login, then judges the tier of the account that actually
+    /// signed in, under that account's own folder and against the same
+    /// <see cref="MaxTierAdmission"/> the roster admits by.
+    /// <para>
+    /// The order is why this runs after the adoption rather than before it: a
+    /// folder logged in once before still carries the earlier login's
+    /// <c>profile.json</c>, and judging on that block would let a stale Max
+    /// identity vouch for the seat that just signed in. Anything but Max is
+    /// refused, including a tier that could not be read, since the operator's
+    /// one address can carry both an Enterprise seat and a personal Max account
+    /// and a login that cannot say which is no evidence that it was the second.
+    /// </para>
+    /// </summary>
+    private async Task<(LoginSessionState State, string Message)> AdmitAsync(Session session)
+    {
+        bool adopted;
+        try
+        {
+            adopted = await _profiles.AdoptFreshLoginAsync(session.Folder, CancellationToken.None);
         }
         catch (IOException)
         {
@@ -369,10 +423,44 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
             adopted = false;
         }
 
-        Settle(
-            session,
-            LoginSessionState.Completed,
-            adopted ? "Logged in as " + session.Email.Value + "." : ResidueKeptMessage);
+        (MaxTierVerdict verdict, string? reason) =
+            await ParkedFolderAdmission.JudgeAsync(session.Folder, _profiles, _authStatus, CancellationToken.None);
+        if (verdict == MaxTierVerdict.Admitted)
+        {
+            return (LoginSessionState.Completed, adopted ? "Logged in as " + session.Email.Value + "." : ResidueKeptMessage);
+        }
+
+        return (LoginSessionState.Failed, RefusedPrefix + (reason ?? UnreadableTierReason) + await DiscardAsync(session.Folder));
+    }
+
+    /// <summary>
+    /// Revokes and empties the folder of a login that turned out not to be a Max
+    /// account, and says which of those two happened.
+    /// <para>
+    /// The revocation is the honest disposition for a seat that must never be
+    /// rotated: the pair exists, and deleted bytes holding a refresh token are
+    /// recoverable where a revoked token is not. It is not, however, what keeps
+    /// the account out of the rotation. A switch admits any folder holding a
+    /// credential file whatever its token is worth, so the file goes too, and it
+    /// goes even when the revocation failed: an unrevoked token the operator has
+    /// been told about is the smaller harm beside a switchable Enterprise seat.
+    /// This is the deliberate opposite of the removal endpoint, which keeps the
+    /// folder when a logout fails, because there nothing has yet been admitted.
+    /// </para>
+    /// </summary>
+    private async Task<string> DiscardAsync(string folder)
+    {
+        Result<Unit, string> revoked = await _logout.LogoutAsync(folder, CancellationToken.None);
+        try
+        {
+            await _profiles.DeleteFolderAsync(folder, CancellationToken.None);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            return NotDeletedSuffix;
+        }
+
+        return revoked.IsSuccess ? RevokedSuffix : NotRevokedSuffix;
     }
 
     /// <summary>

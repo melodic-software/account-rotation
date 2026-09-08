@@ -123,6 +123,8 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
                 provider.GetRequiredService<ProfileFolderStore>(),
                 provider.GetRequiredService<ClaudeStateFile>(),
                 provider.GetRequiredService<CredentialMutationGate>(),
+                provider.GetRequiredService<IClaudeCliAuthStatus>(),
+                provider.GetRequiredService<IClaudeCliLogout>(),
                 Clock)));
         });
     }
@@ -198,13 +200,18 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
         /// <summary>What every folder reports; "max" is the only tier the roster admits.</summary>
         public string? SubscriptionType { get; set; } = "max";
 
+        /// <summary>Set to make every status read fail, the way an unreadable or unparsable one does.</summary>
+        public string? ReadError { get; set; }
+
         /// <summary>Every config directory <c>auth logout</c> was run under, in order.</summary>
         public List<string> LogoutCalls { get; } = [];
 
         public string? LogoutError { get; set; }
 
         public Task<Result<ClaudeAuthStatus, string>> ReadAsync(string? configDirectory, CancellationToken cancellationToken) =>
-            Task.FromResult(Result<ClaudeAuthStatus, string>.Success(new ClaudeAuthStatus(true, Email, "claude.ai", "Personal", SubscriptionType, null)));
+            Task.FromResult(ReadError is string error
+                ? Result<ClaudeAuthStatus, string>.Failure(error)
+                : Result<ClaudeAuthStatus, string>.Success(new ClaudeAuthStatus(true, Email, "claude.ai", "Personal", SubscriptionType, null)));
 
         public Task<Result<Unit, string>> LogoutAsync(string configDirectory, CancellationToken cancellationToken)
         {

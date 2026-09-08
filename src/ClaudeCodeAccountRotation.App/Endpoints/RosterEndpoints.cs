@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using ClaudeCodeAccountRotation.App.Accounts;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Dashboard;
 using ClaudeCodeAccountRotation.App.Security;
@@ -320,14 +321,7 @@ internal static class RosterEndpoints
             return (MaxTierVerdict.Unknown, null);
         }
 
-        OAuthAccountBlock? account = await profiles.ReadAccountAsync(folder, cancellationToken);
-        if (!File.Exists(Path.Combine(folder, FileSystemCredentialPairStore.FileName)))
-        {
-            return MaxTierAdmission.Evaluate(null, account);
-        }
-
-        Result<ClaudeAuthStatus, string> parked = await cli.ReadAsync(folder, cancellationToken);
-        return MaxTierAdmission.Evaluate(parked.IsSuccess ? parked.Value : null, account);
+        return await ParkedFolderAdmission.JudgeAsync(folder, profiles, cli, cancellationToken);
     }
 
     private static IResult Refused(string refusal, string message) =>

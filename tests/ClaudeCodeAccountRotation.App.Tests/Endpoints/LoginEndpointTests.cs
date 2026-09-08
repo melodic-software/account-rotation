@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.Process;
 using ClaudeCodeAccountRotation.Core.Accounts;
 using ClaudeCodeAccountRotation.Core.Identity;
+using ClaudeCodeAccountRotation.Core.Switching;
 
 namespace ClaudeCodeAccountRotation.App.Tests.Endpoints;
 
@@ -172,6 +173,106 @@ public sealed class LoginEndpointTests
         // block came from, so a prune that ran first would have left the stale one.
         File.Exists(Path.Combine(folder, ".claude.json")).ShouldBeFalse();
         Directory.Exists(Path.Combine(folder, "backups")).ShouldBeFalse();
+    }
+
+    /// <summary>
+    /// What the operator is told when the browser step signed them in as a seat
+    /// that is never rotated. It has to name the subscription the CLI reported:
+    /// one address can carry both an Enterprise seat and a personal Max account,
+    /// and the only way to know which one was picked is to be told.
+    /// </summary>
+    private static string RefusedMessage(string subscriptionType) =>
+        "That login was refused: that account reports a \"" + subscriptionType
+        + "\" subscription; only Max accounts are rotated, and a Team or Enterprise seat never is."
+        + " The credentials it wrote were revoked with `claude auth logout` and deleted, so nothing joined the rotation."
+        + " Log in again and pick the Max account at the sign-in step.";
+
+    [Theory]
+    [InlineData("enterprise")]
+    [InlineData("team")]
+    public async Task ALoginThatCompletesAsATeamOrEnterpriseSeatIsRevokedAndLeavesNothingToSwitchTo(string subscriptionType)
+    {
+        await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
+        // One address, two accounts behind it: the browser offers both, and this is
+        // the misclick. The seat must not reach the rotation on the way back.
+        factory.Cli.SubscriptionType = subscriptionType;
+        factory.LoginChild.OnCode = LoginChildScript.CompleteLoginAsync;
+        string folder = FolderOf(factory, ParkedEmail);
+        using HttpClient client = factory.CreateMutatingClient();
+        JsonObject started = await StartLoginAsync(client, TestContext.Current.CancellationToken);
+
+        JsonObject refused = await SubmitCodeAsync(client, started["id"]!.GetValue<string>(), Code, TestContext.Current.CancellationToken);
+
+        refused["state"]!.GetValue<string>().ShouldBe(nameof(LoginSessionState.Failed));
+        refused["message"]!.GetValue<string>().ShouldBe(RefusedMessage(subscriptionType));
+        // Revoked at the source, under that folder and no other, then the pair the
+        // login wrote is gone: a switch admits any folder holding one.
+        factory.Cli.LogoutCalls.ShouldBe([folder]);
+        File.Exists(Path.Combine(folder, CredentialFiles.FileName)).ShouldBeFalse();
+        using HttpResponseMessage switched = await client.PostAsync(Account(ParkedEmail, "/switch"), content: null, TestContext.Current.CancellationToken);
+        switched.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        (await switched.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["refusal"]!
+            .GetValue<string>().ShouldBe(nameof(SwitchRefusal.TargetHasNoCredentials));
+        // The roster entry stays, so the operator can log in again and pick the
+        // other account behind the same address.
+        JsonObject dashboard = (await client.GetFromJsonAsync<JsonObject>(new Uri("/api/dashboard", UriKind.Relative), TestContext.Current.CancellationToken))!;
+        dashboard.ToJsonString().ShouldContain(ParkedEmail);
+    }
+
+    [Fact]
+    public async Task ARefusedLoginWhoseRevocationFailsStillLeavesNothingToSwitchTo()
+    {
+        await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
+        factory.Cli.SubscriptionType = "enterprise";
+        factory.Cli.LogoutError = "claude auth logout exited with code 1";
+        factory.LoginChild.OnCode = LoginChildScript.CompleteLoginAsync;
+        string folder = FolderOf(factory, ParkedEmail);
+        using HttpClient client = factory.CreateMutatingClient();
+        JsonObject started = await StartLoginAsync(client, TestContext.Current.CancellationToken);
+
+        JsonObject refused = await SubmitCodeAsync(client, started["id"]!.GetValue<string>(), Code, TestContext.Current.CancellationToken);
+
+        // A switchable Enterprise seat is worse than an unrevoked token, so the
+        // pair goes either way and the message says the token was not revoked.
+        refused["state"]!.GetValue<string>().ShouldBe(nameof(LoginSessionState.Failed));
+        refused["message"]!.GetValue<string>().ShouldContain("\"enterprise\" subscription");
+        refused["message"]!.GetValue<string>().ShouldContain("could not be revoked");
+        File.Exists(Path.Combine(folder, CredentialFiles.FileName)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task AnUnreadableTierAfterALoginFailsClosedRatherThanAdmitting()
+    {
+        await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
+        factory.Cli.ReadError = "claude auth status printed no JSON object";
+        factory.LoginChild.OnCode = LoginChildScript.CompleteLoginAsync;
+        string folder = FolderOf(factory, ParkedEmail);
+        using HttpClient client = factory.CreateMutatingClient();
+        JsonObject started = await StartLoginAsync(client, TestContext.Current.CancellationToken);
+
+        JsonObject refused = await SubmitCodeAsync(client, started["id"]!.GetValue<string>(), Code, TestContext.Current.CancellationToken);
+
+        refused["state"]!.GetValue<string>().ShouldBe(nameof(LoginSessionState.Failed));
+        refused["message"]!.GetValue<string>().ShouldContain("did not report what kind of account signed in");
+        factory.Cli.LogoutCalls.ShouldBe([folder]);
+        File.Exists(Path.Combine(folder, CredentialFiles.FileName)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task ALoginThatCompletesAsMaxIsAdmittedAndNothingIsRevoked()
+    {
+        await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
+        factory.LoginChild.OnCode = LoginChildScript.CompleteLoginAsync;
+        string folder = FolderOf(factory, ParkedEmail);
+        using HttpClient client = factory.CreateMutatingClient();
+        JsonObject started = await StartLoginAsync(client, TestContext.Current.CancellationToken);
+
+        JsonObject completed = await SubmitCodeAsync(client, started["id"]!.GetValue<string>(), Code, TestContext.Current.CancellationToken);
+
+        completed["state"]!.GetValue<string>().ShouldBe(nameof(LoginSessionState.Completed));
+        completed["message"]!.GetValue<string>().ShouldBe("Logged in as " + ParkedEmail + ".");
+        factory.Cli.LogoutCalls.ShouldBeEmpty();
+        File.Exists(Path.Combine(folder, CredentialFiles.FileName)).ShouldBeTrue();
     }
 
     [Fact]

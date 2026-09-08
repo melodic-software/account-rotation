@@ -23,6 +23,7 @@ public sealed class ClaudeCliLoginSessionRunnerTests : IDisposable
     private readonly string _stateFilePath;
     private readonly CredentialMutationGate _gate = new();
     private readonly LoginChildScript _script = new();
+    private readonly AppFactory.CannedCli _cli = new();
 
     public ClaudeCliLoginSessionRunnerTests()
     {
@@ -45,6 +46,8 @@ public sealed class ClaudeCliLoginSessionRunnerTests : IDisposable
         new ProfileFolderStore(_profilesRoot),
         new ClaudeStateFile(_stateFilePath),
         _gate,
+        _cli,
+        _cli,
         TimeProvider.System);
 
     private async Task WriteStateFileAsync(string email) =>
