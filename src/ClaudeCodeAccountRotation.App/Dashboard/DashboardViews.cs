@@ -34,6 +34,13 @@ internal sealed record RosterEntryView(
     string? Notes);
 
 /// <summary>
+/// One browser profile the machine already has, for the roster's profile
+/// picker. The browser is lowercased the way a roster entry's is, so the page
+/// compares the two without knowing about .NET enum casing.
+/// </summary>
+internal sealed record BrowserProfileView(string Browser, string Directory, string Name, string? Email);
+
+/// <summary>
 /// The windows a live session observed, as the tee recorded them. A card only
 /// ever shows a snapshot that names its own account. The source is not a field
 /// because the tee is the only source there is until the on-demand refresh

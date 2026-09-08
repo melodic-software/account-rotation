@@ -89,6 +89,7 @@ internal static class AppComposition
         // Through the factory so the container owns the gate this file disposes.
         services.AddSingleton(_ => new RosterFile(configuration.AppDataDirectory));
         services.AddSingleton<IBrowserLauncher>(new ChromiumFamilyBrowserLauncher(configuration.BrowserExecutables));
+        services.AddSingleton<IBrowserProfileReader>(new ChromiumLocalStateProfileReader());
 
         AddOutboundClients(services, AnthropicEndpoints.UserAgent(configuration.UserAgentProductToken, Version));
         services.AddSingleton(new SwitchJournal(configuration.AppDataDirectory));
