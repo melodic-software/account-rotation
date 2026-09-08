@@ -88,3 +88,36 @@ All notable changes to this project are documented in this file. The format foll
   counted as `unreadable` and fails the run instead of being silently skipped (#20). The state-temp
   scan follows `CLAUDE_CONFIG_DIR` the same way the app does, so a stale temp left at the home root
   by an old default-root install no longer fails a clean run under a custom config root.
+- Two accounts can no longer normalise onto one profile folder. `a<b@x.com` and `a>b@x.com` both
+  became `a_b@x.com`, and `user@example.com.` was trimmed onto `user@example.com`, so the second
+  account's login overwrote the first account's pair and removing either revoked the other's token.
+  The e-mail rule refuses every character that collapsed, and a dot at either end.
+- A removal takes the one credential mutation gate, re-reads the live account under it rather than
+  before it, and runs the logout and the delete under a cancellation-proof token, so it can no
+  longer land inside a switch and leave the pair in neither place. It also refuses while a login is
+  running against that folder, which used to leave the "removed" account reappearing with a fresh,
+  unrevoked token as soon as the operator pasted the code.
+- Two logins can no longer start against one profile folder: the check and the registration are one
+  step under the gate rather than a scan followed by a spawn. A second code pasted while the first
+  is still being checked is refused instead of overwriting the first caller's completion signal and
+  leaving it to wait out its whole reply budget.
+- A switch refuses, rather than races, while a login is running against either folder it would
+  move. The login's live-account check is also re-read under the gate at the moment the child is
+  spawned, so a switch completing in between can no longer leave one account holding two valid
+  credential pairs.
+- A failing `claude auth status` or `claude auth logout` reports its exit code to the caller and
+  sends what the child printed to the log, instead of returning that output in the message the page
+  renders.
+
+### Security
+
+- Command injection through the `cmd.exe` shim used for an npm-installed CLI. Arguments were joined
+  with a space and no quoting, so an account e-mail carrying `&` was read as a command separator and
+  the rest of it ran as a second command. Every argument is now one quoted operand at the shared
+  construction point, and the two characters quoting cannot neutralise, a quote and a percent sign,
+  are refused there. The account e-mail rule is an allowlist rather than a blocklist as well:
+  letters, digits, and `. _ - + @`, with no dot at either end.
+- The same-origin check on every mutating route compares the `Origin` header against this instance's
+  configured listen address rather than against the request's own `Host`, which the same request
+  supplies. `AllowedHosts` is set to the three loopback names, so the framework's host filter refuses
+  a rebound name before the pipeline reaches a route.

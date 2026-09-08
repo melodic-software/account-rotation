@@ -70,7 +70,7 @@ public sealed class ClaudeCliProcessAuthStatusTests : IDisposable
     }
 
     [Fact(SkipUnless = nameof(OnWindows), Skip = "The fake CLI is a Windows batch file")]
-    public async Task AFailedLogoutKeepsTheChildsOutputOutOfTheRefusalTheCallerGets()
+    public async Task AFailedLogoutKeepsTheChildOutputOutOfTheRefusalTheCallerGets()
     {
         // The same construction serves auth logout, whose failure the removal endpoint
         // puts straight into its refusal message.
