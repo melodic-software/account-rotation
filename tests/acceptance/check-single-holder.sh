@@ -31,13 +31,15 @@ fingerprint() {
 # Any dotfile ending in .tmp beside a directory's credential or state file is
 # a write a crash stopped before its rename landed; it can hold a full
 # credential pair and is fingerprinted exactly like a settled file so a
-# duplicate cannot hide behind a temp name.
+# duplicate cannot hide behind a temp name. The name pattern defaults to every
+# temp in a Claude-owned directory; the home root also holds unrelated tools'
+# temps, so there the pattern is narrowed to ones naming the state file.
 collect_temps() {
-  local dir="$1" entry
+  local dir="$1" pattern="${2:-.*.tmp}" entry
   [[ -d "$dir" ]] || return 0
   while IFS= read -r -d '' entry; do
     files+=("$entry")
-  done < <(find "$dir" -maxdepth 1 -name '.*.tmp' -type f -print0 | sort -z)
+  done < <(find "$dir" -maxdepth 1 -name "$pattern" -type f -print0 | sort -z)
 }
 
 declare -a files=()
@@ -47,10 +49,12 @@ collect_temps "$live_dir"
 # The state file's own temp lands at the home root when CLAUDE_CONFIG_DIR is
 # unset, outside every root the app's own startup sweep covers. It holds no
 # refresh token, so it fingerprints empty and only ever adds a "no refresh
-# token" line below, never a duplicate.
+# token" line below, never a duplicate. Only state-file-named temps are
+# collected here: the home root is not Claude-owned, and an unrelated tool's
+# stray "*.tmp" must not fail this run.
 home_root="${HOME:-}"
 if [[ -n "$home_root" ]] && ! [[ "$home_root" -ef "$live_dir" ]]; then
-  collect_temps "$home_root"
+  collect_temps "$home_root" '.*claude*.tmp'
 fi
 
 if [[ -d "$profiles_root" ]]; then
