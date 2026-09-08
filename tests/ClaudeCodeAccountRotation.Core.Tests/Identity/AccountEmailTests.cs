@@ -28,6 +28,49 @@ public sealed class AccountEmailTests
         result.Error.ShouldContain(expectedReasonFragment);
     }
 
+    [Theory]
+    [InlineData("a&whoami&b@x.com")]
+    [InlineData("a|b@x.com")]
+    [InlineData("a>b@x.com")]
+    [InlineData("a<b@x.com")]
+    [InlineData("a^b@x.com")]
+    [InlineData("a%PATH%b@x.com")]
+    [InlineData("a\"b@x.com")]
+    [InlineData("a:b@x.com")]
+    [InlineData("a*b@x.com")]
+    [InlineData("a?b@x.com")]
+    [InlineData("a'b@x.com")]
+    [InlineData("a!b@x.com")]
+    public void ParseRefusesEveryCharacterOutsideTheAllowlist(string value)
+    {
+        // Each of these is legal RFC 5322 atext and each is a command-interpreter
+        // metacharacter, a forbidden file-name character, or both. The address
+        // reaches both of those, so the boundary admits neither.
+        Result<AccountEmail, string> result = AccountEmail.Parse(value);
+
+        result.IsFailure.ShouldBeTrue();
+        result.Error.ShouldContain("letters, digits");
+    }
+
+    [Theory]
+    [InlineData("user@example.com.")]
+    [InlineData(".user@example.com")]
+    public void ParseRefusesAnAddressWithADotAtEitherEnd(string value)
+    {
+        // The profile folder name trims a trailing dot, so this address and the one
+        // without it would share a folder, and with it a refresh token.
+        Result<AccountEmail, string> result = AccountEmail.Parse(value);
+
+        result.IsFailure.ShouldBeTrue();
+        result.Error.ShouldContain("dot");
+    }
+
+    [Theory]
+    [InlineData("dev.name+tag@example.com")]
+    [InlineData("dev_name-2@sub.example.co.uk")]
+    public void ParseAcceptsAnOrdinaryAddress(string value) =>
+        AccountEmail.Parse(value).IsSuccess.ShouldBeTrue();
+
     [Fact]
     public void ParseRefusesAValueLongerThan254Characters()
     {

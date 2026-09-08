@@ -48,6 +48,30 @@ public sealed class ProfileFolderNameTests
     }
 
     [Fact]
+    public void TwoAddressesTheBoundaryAcceptsNeverNormalizeOntoOneFolder()
+    {
+        // The collisions that were reachable: "<" and ">" both became "_", and a
+        // trailing dot was trimmed onto the address without it. Two roster accounts
+        // sharing a folder means the second login overwrites the first account's
+        // pair, and removing either revokes the other's token.
+        string[] candidates =
+        [
+            "a<b@x.com", "a>b@x.com", "a_b@x.com",
+            "user@example.com", "user@example.com.", "user@example.com. ",
+        ];
+
+        List<string> folders =
+        [
+            .. candidates
+                .Select(AccountEmail.Parse)
+                .Where(static parsed => parsed.IsSuccess)
+                .Select(static parsed => ProfileFolderName.FromEmail(parsed.Value)),
+        ];
+
+        folders.ShouldBe(folders.Distinct());
+    }
+
+    [Fact]
     public void LeavesAnOrdinaryLowercaseEmailUnchanged()
     {
         AccountEmail email = new("dev.name+tag@example.com");
