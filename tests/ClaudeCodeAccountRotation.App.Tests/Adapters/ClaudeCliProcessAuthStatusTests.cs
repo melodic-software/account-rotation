@@ -36,6 +36,29 @@ public sealed class ClaudeCliProcessAuthStatusTests : IDisposable
     }
 
     [Fact(SkipUnless = nameof(OnWindows), Skip = "The fake CLI is a Windows batch file")]
+    public async Task AnArgumentHoldingACommandSeparatorRunsNothingUnderTheRealInterpreter()
+    {
+        // The string-level assertion lives with the locator. This one runs the command
+        // line cmd.exe is actually given: "&" inside quotes must start no second
+        // command, and the quoted argument must still reach the script's %* whole,
+        // which is what the real npm claude.cmd forwards to node.
+        ClaudeExecutable cli = FakeCli("echo ARGS=%*");
+        using System.Diagnostics.Process process = new()
+        {
+            StartInfo = cli.StartInfo(["auth", "login", "--email", "a&whoami&b@x.com"], configDirectory: null),
+        };
+        process.Start();
+
+        string output = await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
+        string error = await process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        output.ShouldNotContain(Environment.UserName, Case.Insensitive, "whoami must never have run");
+        output.ShouldContain("\"a&whoami&b@x.com\"");
+        error.ShouldBeEmpty();
+    }
+
+    [Fact(SkipUnless = nameof(OnWindows), Skip = "The fake CLI is a Windows batch file")]
     public async Task ParsesTheStatusJsonAndPassesTheConfigDirectory()
     {
         // The batch file forward-slashes the directory so the echoed JSON stays valid.
