@@ -53,4 +53,6 @@ All notable changes to this project are documented in this file. The format foll
 - `check-single-holder.sh` fingerprints every dotfile temp beside a credential or state file, not
   just the settled `.credentials.json`, so a crash temp holding a duplicate refresh token can no
   longer hide behind its filename and print a false `duplicates=0`; a temp too damaged to parse is
-  counted as `unreadable` and fails the run instead of being silently skipped (#20).
+  counted as `unreadable` and fails the run instead of being silently skipped (#20). The state-temp
+  scan follows `CLAUDE_CONFIG_DIR` the same way the app does, so a stale temp left at the home root
+  by an old default-root install no longer fails a clean run under a custom config root.

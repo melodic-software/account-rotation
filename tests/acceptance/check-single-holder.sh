@@ -2,7 +2,7 @@
 # Proves the single-holder invariant on a real machine: every refresh token
 # across the live credential file, every parked profile, and every dotfile
 # temp beside them (a crash between a write and its rename, including a
-# state-file write stranded at the home root) exists in exactly one file.
+# state-file write stranded at its own config root) exists in exactly one file.
 # Prints `files=N distinct=N duplicates=0 unreadable=0` and exits 0; any
 # duplicate lineage is listed and the exit code is 1, and a temp too damaged
 # to parse is counted as unreadable rather than silently skipped. Reads the
@@ -46,15 +46,20 @@ declare -a files=()
 [[ -f "$live_dir/$credential_file" ]] && files+=("$live_dir/$credential_file")
 collect_temps "$live_dir"
 
-# The state file's own temp lands at the home root when CLAUDE_CONFIG_DIR is
-# unset, outside every root the app's own startup sweep covers. It holds no
-# refresh token, so it fingerprints empty and only ever adds a "no refresh
-# token" line below, never a duplicate. Only state-file-named temps are
-# collected here: the home root is not Claude-owned, and an unrelated tool's
-# stray "*.tmp" must not fail this run.
-home_root="${HOME:-}"
-if [[ -n "$home_root" ]] && ! [[ "$home_root" -ef "$live_dir" ]]; then
-  collect_temps "$home_root" '.*claude*.tmp'
+# The state file is "$HOME/.claude.json" when CLAUDE_CONFIG_DIR is unset and
+# "$CLAUDE_CONFIG_DIR/.claude.json" when it is set, so its own crash temp lands
+# in whichever of those roots is live. Follow that same rule rather than always
+# scanning the home root: under a custom root, a temp left at "$HOME" by an old
+# default-root installation is stale residue this run must not fail on. When the
+# state root is the live directory it was already scanned above.
+#
+# A state temp holds no refresh token, so it fingerprints empty and only ever
+# adds a "no refresh token" line below, never a duplicate. Only state-file-named
+# temps are collected here: a state root that is the home directory is not
+# Claude-owned, and an unrelated tool's stray "*.tmp" must not fail this run.
+state_root="${CLAUDE_CONFIG_DIR:-${HOME:-}}"
+if [[ -n "$state_root" ]] && ! [[ "$state_root" -ef "$live_dir" ]]; then
+  collect_temps "$state_root" '.*claude*.tmp'
 fi
 
 if [[ -d "$profiles_root" ]]; then
