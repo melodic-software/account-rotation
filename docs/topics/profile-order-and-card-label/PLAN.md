@@ -37,7 +37,7 @@ path segment so a roster entry cannot point a login at a directory outside `User
 ### Acceptance criteria
 
 - `ChromiumLocalStateProfileReader.ReadAsync` returns, for a `Local State` whose `info_cache` lists
-  `Profile 10, Profile 2, Default, Work, Profile 1` in that document order, the sequence `Default,
+  `Profile 10, Profile 2, Work, Default, Profile 1` in that document order, the sequence `Default,
   Profile 1, Profile 2, Profile 10, Work`; a reader test pins it.
 - `POST /api/accounts` and `PATCH /api/accounts/{email}` return 400 with an explanatory `error` for a
   `browserProfileDirectory` containing `/` or `\`, equal to `.` or `..`, or carrying leading or
@@ -66,7 +66,22 @@ path segment so a roster entry cannot point a login at a directory outside `User
 
 ## Plan
 
-### Phase 1: Order, card label, and the #43 fence [TODO]
+### Phase 1: Order, card label, and the #43 fence [DONE]
+
+Done 2026-09-11 on `feat/profile-order-and-card-label`. Test-first for the reader order (one red
+fact on a scrambled fixture) and the #43 fence (seven red Theory cases plus one PATCH fact), green in
+the same commit; the card label and the changelog followed. `dotnet test -c Release`: total 320,
+failed 0, skipped 1 (the pre-existing Unix file-mode skip); `dotnet build -c Release
+--no-incremental` 0 warnings. Browser drive: an isolated instance built from the branch (temp config,
+port 48222, this machine's real browsers, no synthetic `Local State` because the reader has no path
+override and the real files already carry the gaps) returned Chrome `Default, Profile 1, 2, 3` and
+Edge `Default, Profile 4, 6, 7, 8, 9` from `/api/browser-profiles`; Playwright read the same order
+from the Add form's three `optgroup`s, read `chrome / <display name> (Profile 1)` on a card mapped to
+a catalog profile and `chrome / Profile 99` on one mapped to a directory the catalog lacks, and a
+POST carrying `../Profile 1` was refused with 400 and produced no card. A fresh-context
+`implementation:phase-verifier` returned CONFIRMED on all seven criteria against the working tree
+(its two non-blocking notes, the comparer's visibility and the fixture's stated order, are applied in
+the closing commit).
 
 Work items, in order:
 

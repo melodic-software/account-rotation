@@ -155,7 +155,7 @@ internal sealed class ChromiumLocalStateProfileReader : IBrowserProfileReader
     /// in ordinal order after all of those. Case-sensitive on purpose: these are
     /// directory names the browser wrote, compared as the launcher passes them.
     /// </summary>
-    internal static int CompareDirectories(string left, string right)
+    private static int CompareDirectories(string left, string right)
     {
         (int leftRank, int leftNumber) = Rank(left);
         (int rightRank, int rightNumber) = Rank(right);
