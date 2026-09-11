@@ -100,6 +100,25 @@ public sealed class ChromiumLocalStateProfileReaderTests : IDisposable
         (await Reader().ReadAsync(TestContext.Current.CancellationToken))[0].Name.ShouldBe("Profile 7");
     }
 
+    [Fact]
+    // The browser numbers directories from a counter it never decrements and
+    // writes info_cache in whatever order it likes, so the file's order is a
+    // deletion history, not a list. The operator reads Default first, then the
+    // numbers as numbers, then anything the browser named some other way.
+    public async Task ProfilesComeBackDefaultFirstThenByNumberThenTheRestByName()
+    {
+        await WriteAsync(BrowserFamily.Edge, LocalState(
+            ("Profile 10", "Ten", null),
+            ("Profile 2", "Two", null),
+            ("Work", "Work", null),
+            ("Default", "Profile 1", null),
+            ("Profile 1", "One", null)));
+
+        IReadOnlyList<BrowserProfile> profiles = await Reader().ReadAsync(TestContext.Current.CancellationToken);
+
+        profiles.Select(profile => profile.Directory).ShouldBe(["Default", "Profile 1", "Profile 2", "Profile 10", "Work"]);
+    }
+
     [Theory]
     // Every way the file can fail to answer is the same answer: this browser
     // has no profiles. A browser the operator never installed must not take

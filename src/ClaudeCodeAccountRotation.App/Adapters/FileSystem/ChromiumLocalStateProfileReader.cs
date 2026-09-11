@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using ClaudeCodeAccountRotation.App.Adapters.Process;
 using ClaudeCodeAccountRotation.Core.Accounts;
@@ -139,7 +140,50 @@ internal sealed class ChromiumLocalStateProfileReader : IBrowserProfileReader
             profiles.Add(new BrowserProfile(browser, entry.Name, Text(entry.Value, "name") ?? entry.Name, SignedInAs(entry.Value)));
         }
 
+        // The file's order is the browser's own bookkeeping, not a list for a
+        // person: directories come from a counter the browser never decrements,
+        // so deletions leave gaps, and nothing promises the keys are written in
+        // any order at all. Sort here so the picker reads the way the operator
+        // does: Default, then the numbered profiles as numbers, then the rest.
+        profiles.Sort(static (left, right) => CompareDirectories(left.Directory, right.Directory));
         return profiles;
+    }
+
+    /// <summary>
+    /// <c>Default</c> first, then <c>Profile N</c> by <c>N</c> so that
+    /// <c>Profile 10</c> follows <c>Profile 2</c>, then any other directory name
+    /// in ordinal order after all of those. Case-sensitive on purpose: these are
+    /// directory names the browser wrote, compared as the launcher passes them.
+    /// </summary>
+    internal static int CompareDirectories(string left, string right)
+    {
+        (int leftRank, int leftNumber) = Rank(left);
+        (int rightRank, int rightNumber) = Rank(right);
+        int byRank = leftRank.CompareTo(rightRank);
+        if (byRank != 0)
+        {
+            return byRank;
+        }
+
+        int byNumber = leftNumber.CompareTo(rightNumber);
+        return byNumber != 0 ? byNumber : string.CompareOrdinal(left, right);
+    }
+
+    private static (int Rank, int Number) Rank(string directory)
+    {
+        const string prefix = "Profile ";
+        if (directory == "Default")
+        {
+            return (0, 0);
+        }
+
+        if (directory.StartsWith(prefix, StringComparison.Ordinal)
+            && int.TryParse(directory.AsSpan(prefix.Length), NumberStyles.None, CultureInfo.InvariantCulture, out int number))
+        {
+            return (1, number);
+        }
+
+        return (2, 0);
     }
 
     /// <summary>

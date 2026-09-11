@@ -70,6 +70,12 @@ internal static class RosterEndpoints
                 return Results.BadRequest(new { error = browser.Error });
             }
 
+            Result<string?, string> directory = ParseProfileDirectory(body);
+            if (directory.IsFailure)
+            {
+                return Results.BadRequest(new { error = directory.Error });
+            }
+
             (MaxTierVerdict verdict, string? reason) = await JudgeAsync(email, profiles, stateFile, cli, configuration, cancellationToken);
             if (verdict == MaxTierVerdict.Refused)
             {
@@ -81,7 +87,7 @@ internal static class RosterEndpoints
                 email,
                 Text(body, "alias"),
                 browser.Value,
-                Text(body, "browserProfileDirectory"),
+                directory.Value,
                 Paused: false,
                 Text(body, "notes"));
             await rosterFile.UpdateAsync(roster => roster.With(entry), cancellationToken);
@@ -118,6 +124,12 @@ internal static class RosterEndpoints
                 return Results.BadRequest(new { error = browser.Error });
             }
 
+            Result<string?, string> directory = ParseProfileDirectory(body);
+            if (directory.IsFailure)
+            {
+                return Results.BadRequest(new { error = directory.Error });
+            }
+
             // Presence-based, key by key: a record of nullable fields cannot tell
             // "clear the alias" from "leave the alias alone", and an edit that
             // silently reset the fields it did not mention would be worse than
@@ -126,7 +138,7 @@ internal static class RosterEndpoints
             {
                 Alias = body.ContainsKey("alias") ? Text(body, "alias") : existing.Alias,
                 Browser = body.ContainsKey("browser") ? browser.Value : existing.Browser,
-                BrowserProfileDirectory = body.ContainsKey("browserProfileDirectory") ? Text(body, "browserProfileDirectory") : existing.BrowserProfileDirectory,
+                BrowserProfileDirectory = body.ContainsKey("browserProfileDirectory") ? directory.Value : existing.BrowserProfileDirectory,
                 Paused = Flag(body, "paused") ?? existing.Paused,
                 Notes = body.ContainsKey("notes") ? Text(body, "notes") : existing.Notes,
             };
@@ -331,6 +343,31 @@ internal static class RosterEndpoints
         return Enum.TryParse(value, ignoreCase: true, out BrowserFamily browser)
             ? Result<BrowserFamily?, string>.Success(browser)
             : Result<BrowserFamily?, string>.Failure("browser must be one of " + string.Join(", ", Enum.GetNames<BrowserFamily>()).ToLowerInvariant());
+    }
+
+    /// <summary>
+    /// The browser-profile directory a body names, or null when it names none.
+    /// It becomes <c>--profile-directory=&lt;value&gt;</c>, which the browser
+    /// resolves under its own user-data directory, so a separator or a
+    /// dot-segment would send a login to a profile the roster never chose.
+    /// Exactly one path segment, as the browser wrote it, is what goes through;
+    /// leading or trailing whitespace is refused rather than trimmed because
+    /// the launcher passes the string verbatim and a browser would create a
+    /// second, blank profile under the padded name.
+    /// </summary>
+    private static Result<string?, string> ParseProfileDirectory(JsonObject body)
+    {
+        if (Text(body, "browserProfileDirectory") is not string value)
+        {
+            return Result<string?, string>.Success(null);
+        }
+
+        bool oneSegment = value.AsSpan().IndexOfAny('/', '\\') < 0
+            && value is not ("." or "..")
+            && value.Trim().Length == value.Length;
+        return oneSegment
+            ? Result<string?, string>.Success(value)
+            : Result<string?, string>.Failure("browserProfileDirectory must be a single directory name such as \"Profile 3\": no path separators, no \".\" or \"..\", no leading or trailing whitespace");
     }
 
     private static string? Text(JsonObject body, string key) =>
