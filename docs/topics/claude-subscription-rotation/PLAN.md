@@ -656,7 +656,7 @@ to 5 except that Phase 2's `RateLimitGuardTeeFileReader` already parses the key 
   verifier passed all eleven criteria; #1218 is closed as not planned, so the body cites it as `Refs`
   with a `No related issue:` line rather than a closing keyword. Two Codex findings fixed and every
   CI lane green; squash-merged 2026-09-06 as claude-code-plugins#3778, rate-limit-guard `0.8.0` is
-  live on the marketplace `main`. Phase 6 stays DOING for 6.6, which lands with Phase 2 here.) Open the PR with `/source-control:pull-request`; body references #1218, lists the
+  live on the marketplace `main`. Phase 6 stayed DOING for 6.6, which landed 2026-09-10 with Phase 2 here; the heading is `[DONE]`.) Open the PR with `/source-control:pull-request`; body references #1218, lists the
   consumers from 6.1, carries the timing numbers, and names the reader-side follow-up as out of scope.
 - [x] **6.6** (2026-09-10: landed with Phase 2's `DashboardAssembler`;
   `DashboardAssemblerTests.PreSwitchWindowsAreUnattributed` and

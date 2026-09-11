@@ -227,7 +227,24 @@ Work items, in order:
 - `curl -si http://127.0.0.1:48222/healthz` on a run with the Phase 1 seeded config prints `200`, `Content-Type: text/plain`, a `Cache-Control` line matching `grep -i 'cache-control:.*no-store'`, and body `Healthy`.
 - `dotnet test -c Release`: `failed: 0`, total ≥ 311; `gh pr view <n> --json state -q .state` prints `MERGED`.
 
-### Phase 3: Reinstall the merged build on this machine [TODO]
+### Phase 3: Reinstall the merged build on this machine [DONE]
+
+Done 2026-09-11 on `main` at `e8b5096`: `dotnet publish … -r win-x64` with no `--source` restored
+cleanly (no NU1507/NU1801); the RID restore drifted only the two `packages.lock.json` files, reverted
+with `git checkout --`; the old instance (built from `03e6d78`) was stopped through PowerShell
+`Stop-Process -Force`, `instance.lock` vanished with its handle (delete-on-close), the exe was copied
+over `~/.local/bin`, and the new instance started detached from the scratchpad script with an empty
+`stderr.log` and `instance.url` rewritten. Sanity checks: `--version | grep -c "$(git rev-parse
+HEAD)"` 1 (the bare name resolves through PATH to `~/.local/bin`); `/healthz` 200, `text/plain`,
+`Cache-Control: no-store, no-cache`, body `Healthy`; `/api/browser-profiles | jq length` 5 at the
+first check and 7 at the fresh-context re-check ten minutes later (two profile directories appeared
+on the machine in between; three families, chrome, edge, brave, both times); `git status --short`
+empty after the lock-file revert (observed before this mark was written). Browser: the Add form's
+"Browser profile" select carries one `optgroup` per family (chrome, edge, brave) around the
+discovered profiles plus the ungrouped "no profile" and "another profile" options, read from the DOM
+and captured in a screenshot; a fresh-context verifier confirmed the served `app.js` is byte-identical
+to the tree's. The ruleset on `main` carries a `pull_request` rule, so this mark's commit home is the
+user's call.
 
 Work items, in order:
 
