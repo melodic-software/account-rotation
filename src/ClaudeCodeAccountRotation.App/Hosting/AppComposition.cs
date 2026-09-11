@@ -118,6 +118,7 @@ internal static class AppComposition
         services.AddHostedService<InstanceLockHolder>();
         services.AddHostedService<StartupReconciliation>();
         services.AddHostedService<StateFileWatcher>();
+        // No checks registered: liveness only. MapRoutes maps the /healthz route this serves.
         services.AddHealthChecks();
 
         // Loopback only: the page is a local control surface, never a network service.
