@@ -126,14 +126,18 @@
       typed.value = values.browserProfileDirectory;
     }
 
-    // The value the last auto-match put in the select, so a later one may
-    // replace it while a hand-picked value is left alone.
-    var autoPicked = null;
+    // Set once the operator has chosen from the profile select by hand,
+    // including "no browser profile mapped": from then on no auto-match may
+    // replace what they chose.
+    var handPicked = false;
 
     function sync() { typedRow.hidden = profile.value !== OTHER; }
 
     profile.addEventListener("change", function () {
-      var found = profileCatalog[Number(profile.value)];
+      handPicked = true;
+      // Number("") is 0, so an empty selection must not be looked up: it would
+      // read as the first profile and flip the browser select to its browser.
+      var found = profile.value !== "" && profile.value !== OTHER ? profileCatalog[Number(profile.value)] : null;
       // Picking a profile names its browser too; showing that in the browser
       // select keeps the two from disagreeing on the way to the server.
       if (found) { browser.value = found.browser; }
@@ -147,24 +151,34 @@
         return {
           alias: alias.value.trim() || null,
           browser: browser.value || null,
-          browserProfileDirectory: found ? found.directory : (typed.value.trim() || null)
+          // The typed directory counts only while the escape hatch is chosen;
+          // an empty selection means no mapping, whatever the hidden field
+          // still holds from an earlier off-catalog value.
+          browserProfileDirectory: found ? found.directory : (profile.value === OTHER ? (typed.value.trim() || null) : null)
         };
       },
       // Nine of ten accounts are already signed into a profile on this machine,
-      // so the mapping is derivable rather than typed. Overridable: it replaces
-      // an empty selection or its own previous guess, never a hand-picked one.
+      // so the mapping is derivable rather than typed. Overridable: it fills an
+      // empty selection or replaces its own previous guess, and never touches a
+      // value the operator picked by hand, "no browser profile mapped" included.
       autoMatch: function (address) {
-        if (profile.value !== "" && profile.value !== autoPicked) { return; }
+        if (handPicked) { return; }
         var wanted = (address || "").trim().toLowerCase();
         var index = -1;
         for (var i = 0; wanted && i < profileCatalog.length; i++) {
           if (profileCatalog[i].email === wanted) { index = i; break; }
         }
-        autoPicked = index < 0 ? null : String(index);
-        profile.value = autoPicked || "";
+        profile.value = index < 0 ? "" : String(index);
         // Only on a hit: a miss clears the guess without undoing a browser the
         // operator chose by hand.
         if (index >= 0) { browser.value = profileCatalog[index].browser; }
+        sync();
+      },
+      // After the form's own reset: the controls are back to their defaults but
+      // this closure is not, and a hand-pick made for one account must not
+      // silence auto-match for the next.
+      reset: function () {
+        handPicked = false;
         sync();
       }
     };
@@ -450,6 +464,7 @@
     mutate("/api/accounts", "POST", body, function (result) {
       if (result.ok) {
         addForm.reset();
+        addFields.reset();
         showToast(body.email + " added; it needs a login before it can be switched to", "ok");
       } else {
         showToast(refused(result.body), "error");
