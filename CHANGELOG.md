@@ -156,6 +156,27 @@ All notable changes to this project are documented in this file. The format foll
   verbatim, which the browser appends to its own user-data directory without normalising it, so a
   dot-segment walks elsewhere and a trailing dot or an NTFS stream suffix aliases a sibling profile on
   Windows.
+- A Team or Enterprise seat could reach the rotation through the login. The tier was judged only when
+  an account was added or adopted, and an account with no folder yet has nothing to judge, so it
+  joined as "needs login"; whichever account was then picked at the browser step was accepted with no
+  second look. One address can carry both an Enterprise seat and a personal Max account, and the
+  browser offers both, so a single misclick put the seat that is never rotated into the rotation. The
+  tier is now judged again once a login has written its credentials and its `profile.json`, under
+  that account's own folder and against the same admission the roster admits by. Anything but Max is
+  refused, including a tier that could not be read: the login is revoked with `claude auth logout`
+  under that folder, the pair it wrote is deleted (a switch admits any folder holding one, whatever
+  its token is worth), and the session's message names the subscription the CLI reported and says the
+  credentials were revoked. The roster entry stays, so the account can be logged in again and the Max
+  account picked instead. A revocation that fails still deletes the pair and says so. The judgement
+  takes no identity the folder records, because a folder logged in before carries the earlier
+  login's `profile.json` and a login whose tidy-up could not run leaves its state file behind, so
+  nothing on disk proves which login wrote a block naming a Max tier. And the guard discards only a
+  pair the login is proven to have written: the credential file is read before the CLI starts and
+  again when it ends, the same bytes are the earlier login left untouched (the session ends the way
+  a login that wrote nothing does), and a pair that was rewritten but whose tier cannot be read is
+  kept, with the message saying to remove the account before switching to it, rather than deleted;
+  that kept folder is left exactly as the CLI left it, with no `profile.json` rewritten and no
+  residue pruned, and a fault while judging is settled the same way rather than left pending.
 - Command injection through the `cmd.exe` shim used for an npm-installed CLI. Arguments were joined
   with a space and no quoting, so an account e-mail carrying `&` was read as a command separator and
   the rest of it ran as a second command. Every argument is now one quoted operand at the shared

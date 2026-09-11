@@ -111,6 +111,8 @@ internal static class AppComposition
             provider.GetRequiredService<ProfileFolderStore>(),
             provider.GetRequiredService<ClaudeStateFile>(),
             provider.GetRequiredService<CredentialMutationGate>(),
+            provider.GetRequiredService<IClaudeCliAuthStatus>(),
+            provider.GetRequiredService<IClaudeCliLogout>(),
             provider.GetRequiredService<TimeProvider>()));
         services.AddSingleton<LiveDirectorySwitch>();
         services.AddSingleton<DashboardState>();
