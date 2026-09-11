@@ -136,6 +136,8 @@ public sealed class RosterEndpointTests
     [InlineData("Default::$INDEX_ALLOCATION")]
     [InlineData("CON")]
     [InlineData("nul.txt")]
+    [InlineData("COM¹")]
+    [InlineData("LPT².txt")]
     [InlineData("Profile\t3")]
     public async Task AddRefusesADirectoryThatIsNotASinglePathSegment(string directory)
     {

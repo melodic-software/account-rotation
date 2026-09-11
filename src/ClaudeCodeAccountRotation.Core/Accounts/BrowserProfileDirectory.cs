@@ -18,11 +18,13 @@ public static class BrowserProfileDirectory
 
     private static readonly System.Buffers.SearchValues<char> _refused = System.Buffers.SearchValues.Create("/\\<>:\"|?*");
 
+    // Win32's list, including the three superscript digits it accepts as
+    // digits in a device name (COM¹ is COM1 to the kernel, in every directory).
     private static readonly HashSet<string> _reservedDeviceNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "CON", "PRN", "AUX", "NUL",
-        "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-        "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "COM¹", "COM²", "COM³",
+        "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9", "LPT¹", "LPT²", "LPT³",
     };
 
     public static Result<string, string> Parse(string value)
