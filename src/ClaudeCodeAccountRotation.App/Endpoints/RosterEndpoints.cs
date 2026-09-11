@@ -347,13 +347,10 @@ internal static class RosterEndpoints
 
     /// <summary>
     /// The browser-profile directory a body names, or null when it names none.
-    /// It becomes <c>--profile-directory=&lt;value&gt;</c>, which the browser
-    /// resolves under its own user-data directory, so a separator or a
-    /// dot-segment would send a login to a profile the roster never chose.
-    /// Exactly one path segment, as the browser wrote it, is what goes through;
-    /// leading or trailing whitespace is refused rather than trimmed because
-    /// the launcher passes the string verbatim and a browser would create a
-    /// second, blank profile under the padded name.
+    /// The rule itself lives in <see cref="BrowserProfileDirectory"/>, shared
+    /// with the launcher, so a value the roster accepts is one the launcher
+    /// will emit and a value written into the roster file by other means is
+    /// held to the same rule on its way out.
     /// </summary>
     private static Result<string?, string> ParseProfileDirectory(JsonObject body)
     {
@@ -362,12 +359,9 @@ internal static class RosterEndpoints
             return Result<string?, string>.Success(null);
         }
 
-        bool oneSegment = value.AsSpan().IndexOfAny('/', '\\') < 0
-            && value is not ("." or "..")
-            && value.Trim().Length == value.Length;
-        return oneSegment
-            ? Result<string?, string>.Success(value)
-            : Result<string?, string>.Failure("browserProfileDirectory must be a single directory name such as \"Profile 3\": no path separators, no \".\" or \"..\", no leading or trailing whitespace");
+        return BrowserProfileDirectory.Parse(value).Match(
+            static directory => Result<string?, string>.Success(directory),
+            static error => Result<string?, string>.Failure("browserProfileDirectory: " + error));
     }
 
     private static string? Text(JsonObject body, string key) =>

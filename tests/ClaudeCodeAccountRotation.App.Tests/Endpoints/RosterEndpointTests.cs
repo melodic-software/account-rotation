@@ -130,6 +130,13 @@ public sealed class RosterEndpointTests
     [InlineData(".")]
     [InlineData(" Profile 3")]
     [InlineData("Profile 3 ")]
+    // Windows resolves each of these to something other than the literal name:
+    // a stripped trailing dot, an NTFS stream, a device, a control character.
+    [InlineData("Profile 3.")]
+    [InlineData("Default::$INDEX_ALLOCATION")]
+    [InlineData("CON")]
+    [InlineData("nul.txt")]
+    [InlineData("Profile\t3")]
     public async Task AddRefusesADirectoryThatIsNotASinglePathSegment(string directory)
     {
         await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);

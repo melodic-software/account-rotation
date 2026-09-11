@@ -81,7 +81,13 @@ a catalog profile and `chrome / Profile 99` on one mapped to a directory the cat
 POST carrying `../Profile 1` was refused with 400 and produced no card. A fresh-context
 `implementation:phase-verifier` returned CONFIRMED on all seven criteria against the working tree
 (its two non-blocking notes, the comparer's visibility and the fixture's stated order, are applied in
-the closing commit).
+the closing commit). Review lanes (code, security): no defect; the security lane's P4 on Windows
+alias spellings (trailing dot, NTFS stream suffix, reserved device names, control characters,
+unbounded length) and its note that the launcher trusted the roster file as written are both taken:
+the rule moved into `Core.Accounts.BrowserProfileDirectory`, shared by the endpoints and the
+launcher (five more refused shapes in the endpoint Theory, one launcher refusal test), and the
+login-session comment's "no more sensitive than the dashboard" claim was reworded to the property
+actually defended.
 
 Work items, in order:
 
