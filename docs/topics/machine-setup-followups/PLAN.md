@@ -234,8 +234,9 @@ cleanly (no NU1507/NU1801); the RID restore drifted only the two `packages.lock.
 with `git checkout --`; the old instance (built from `03e6d78`) was stopped through PowerShell
 `Stop-Process -Force`, `instance.lock` vanished with its handle (delete-on-close), the exe was copied
 over `~/.local/bin`, and the new instance started detached from the scratchpad script with an empty
-`stderr.log` and `instance.url` rewritten. Sanity checks: `--version | grep -c "$(git rev-parse
-HEAD)"` 1 (the bare name resolves through PATH to `~/.local/bin`); `/healthz` 200, `text/plain`,
+`stderr.log` and `instance.url` rewritten. Sanity checks: `--version | grep -c e8b5096` 1, the
+installed build's commit named explicitly because this mark lands in a later docs-only commit that
+rebuilds nothing (the bare name resolves through PATH to `~/.local/bin`); `/healthz` 200, `text/plain`,
 `Cache-Control: no-store, no-cache`, body `Healthy`; `/api/browser-profiles | jq length` 5 at the
 first check and 7 at the fresh-context re-check ten minutes later (two profile directories appeared
 on the machine in between; three families, chrome, edge, brave, both times); `git status --short`
@@ -261,7 +262,7 @@ Work items, in order:
 
 **Sanity Check:**
 
-- `claude-code-account-rotation --version | grep -c "$(git rev-parse HEAD)"` prints `1`.
+- `claude-code-account-rotation --version | grep -c <installed build commit>` prints `1`, where the commit is the one item 2 published (`e8b5096` on this machine), not whatever `HEAD` is when the check is re-run.
 - `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:48211/healthz` prints `200` and `curl -s http://127.0.0.1:48211/healthz` prints `Healthy`.
 - `curl -s http://127.0.0.1:48211/api/browser-profiles | jq length` ≥ 1.
 - `git status --short` is empty after the lock-file revert.
