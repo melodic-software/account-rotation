@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using ClaudeCodeAccountRotation.App.Accounts;
@@ -44,6 +45,18 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     private const string ExpiredMessage = "This login expired after ten minutes. Start it again.";
     private const string EndedMessage = "The login ended without writing a credential file. Start it again.";
     private const string ResidueKeptMessage = "The login wrote credentials but named no account, so the folder was left exactly as it is.";
+    private const string EndedKeptMessage =
+        "The login ended without writing new credentials; the earlier login in that folder was left as it was. Start it again.";
+    private const string ExpiredKeptMessage =
+        "This login expired after ten minutes; the earlier login in that folder was left as it was. Start it again.";
+    private const string UnreadablePairAtStartReason =
+        "the credentials already in that folder could not be read, so a new login there could not be told apart from them; try again in a moment";
+    private const string UnreadablePairMessage =
+        "The credentials in that folder could not be read after the login ended, so what it wrote could not be told from what was"
+        + " there before, and nothing was deleted. Remove the account from the roster, which revokes that login, before switching to it.";
+    private const string UnjudgedKeptMessage =
+        "What kind of account signed in could not be checked, and the folder held a login before this one, so its credentials were"
+        + " left in place rather than deleted. Remove the account from the roster, which revokes that login, before switching to it.";
 
     private const string RefusedPrefix = "That login was refused: ";
     private const string UnreadableTierReason =
@@ -146,13 +159,30 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
                     "that account is live on this machine; switch away from it before logging it in again");
             }
 
+            // What the folder holds before the child can touch it, read under the
+            // same gate, so nothing else is moving it: the finish tells this login's
+            // own pair from an earlier one only by comparison with this reading.
+            string? digestAtStart;
+            try
+            {
+                digestAtStart = await DigestCredentialFileAsync(folder);
+            }
+            catch (IOException)
+            {
+                return Result<LoginSession, string>.Failure(UnreadablePairAtStartReason);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return Result<LoginSession, string>.Failure(UnreadablePairAtStartReason);
+            }
+
             Result<ILoginChild, string> child = _start(Arguments(email), folder);
             if (child.IsFailure)
             {
                 return Result<LoginSession, string>.Failure(child.Error);
             }
 
-            session = new Session(LoginSessionId.New(), email, folder, child.Value, _clock.GetUtcNow() + SessionLifetime, SessionLifetime, _clock);
+            session = new Session(LoginSessionId.New(), email, folder, child.Value, digestAtStart, _clock.GetUtcNow() + SessionLifetime, SessionLifetime, _clock);
             _sessions[session.Id.Value] = session;
         }
         finally
@@ -261,6 +291,15 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
         return Snapshot(session);
     }
 
+    /// <summary>
+    /// Completes once the session's pump has finished the folder, or at once for
+    /// an unknown session. Expiry settles a session inside the request that
+    /// notices it, and the folder is finished on the pump afterwards; a test
+    /// asserting on what that finish left behind has nothing else to await.
+    /// </summary>
+    internal Task FinishedAsync(LoginSessionId id) =>
+        _sessions.TryGetValue(id.Value, out Session? session) ? session.Pump : Task.CompletedTask;
+
     public void Dispose()
     {
         foreach (Session session in _sessions.Values)
@@ -356,30 +395,61 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     /// credential file written before the state file names its account, and
     /// pruning on that reading would delete the fresh identity and leave the
     /// stale one.
+    /// <para>
+    /// A pair in the folder is not proof that this login wrote it. The folder
+    /// may have held a working login before the child started ("Log in again"),
+    /// and a login that ended without completing leaves that pair exactly as it
+    /// found it. So the file is compared with the reading taken at the start:
+    /// the same bytes are the earlier login, untouched, and the session ends the
+    /// way a login that wrote nothing does; different bytes, or a file where
+    /// there was none, are this login's and are judged.
+    /// </para>
     /// </summary>
     private async Task FinishAsync(Session session)
     {
         if (!File.Exists(Path.Combine(session.Folder, FileSystemCredentialPairStore.FileName)))
         {
-            bool expired = _clock.GetUtcNow() >= session.ExpiresAt;
-            Settle(
-                session,
-                expired ? LoginSessionState.Expired : LoginSessionState.Failed,
-                expired ? ExpiredMessage : EndedMessage,
-                onlyWhilePending: true);
+            SettleUnwritten(session, ExpiredMessage, EndedMessage);
             return;
         }
 
-        // The folder holds a pair, so the login worked whatever happens next. Every
-        // way the tidy-up can fail is caught here: a fault escaping would leave the
-        // session pending behind a killed child until its expiry, and the operator
-        // watching a completed login say "still waiting" for ten minutes.
+        // The folder holds a pair. Every way the rest can fail is caught here: a
+        // fault escaping would leave the session pending behind a killed child
+        // until its expiry, and the operator watching a completed login say "still
+        // waiting" for ten minutes.
         try
         {
-            // The whole of it under one permit. Judging the tier and then revoking
-            // it are two CLI runs, and a switch that slipped between them would take
-            // the very pair being refused.
+            // The whole of it under one permit. Reading the pair, judging the tier,
+            // and revoking it are separate steps, and a switch that slipped between
+            // any two of them would take the very pair being compared or refused.
             using IDisposable permit = await _gate.AcquireAsync(_gateWait, CancellationToken.None);
+            string? digest;
+            try
+            {
+                digest = await DigestCredentialFileAsync(session.Folder);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // Unreadable, so unprovable either way; the one safe disposition is
+                // to touch nothing and say so.
+                Settle(session, LoginSessionState.Failed, UnreadablePairMessage);
+                return;
+            }
+
+            if (digest is null)
+            {
+                // Gone between the check above and the read: moved by something that
+                // held the gate first. Nothing here to judge.
+                SettleUnwritten(session, ExpiredMessage, EndedMessage);
+                return;
+            }
+
+            if (digest == session.CredentialFileDigestAtStart)
+            {
+                SettleUnwritten(session, ExpiredKeptMessage, EndedKeptMessage);
+                return;
+            }
+
             (LoginSessionState state, string message) = await AdmitAsync(session);
             Settle(session, state, message);
         }
@@ -393,17 +463,67 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     }
 
     /// <summary>
+    /// The end of a login that wrote no pair of its own: expired if its time ran
+    /// out, failed otherwise, and only if nothing settled it first, since expiry
+    /// is usually noticed and recorded by whichever request found it.
+    /// </summary>
+    private void SettleUnwritten(Session session, string expiredMessage, string endedMessage)
+    {
+        bool expired = _clock.GetUtcNow() >= session.ExpiresAt;
+        Settle(
+            session,
+            expired ? LoginSessionState.Expired : LoginSessionState.Failed,
+            expired ? expiredMessage : endedMessage,
+            onlyWhilePending: true);
+    }
+
+    /// <summary>
+    /// The SHA-256 of the credential file's bytes, or null when the folder holds
+    /// none, read through the shared reader so the CLI's own write to the file
+    /// is never blocked by it. Bytes, not the token inside them: an unparsable
+    /// file still compares, and a completed login always writes new tokens.
+    /// </summary>
+    private static async Task<string?> DigestCredentialFileAsync(string folder)
+    {
+        string path = Path.Combine(folder, FileSystemCredentialPairStore.FileName);
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            byte[] bytes = await SharedFileReader.ReadAllBytesAsync(path, CancellationToken.None);
+            return Convert.ToHexString(SHA256.HashData(bytes));
+        }
+        catch (FileNotFoundException)
+        {
+            return null;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Adopts the fresh login, then judges the tier of the account that actually
     /// signed in, under that account's own folder and against the same
-    /// <see cref="MaxTierAdmission"/> the roster admits by.
+    /// <see cref="MaxTierAdmission"/> the roster admits by, from the CLI's answer
+    /// alone.
     /// <para>
-    /// The order is why this runs after the adoption rather than before it: a
-    /// folder logged in once before still carries the earlier login's
-    /// <c>profile.json</c>, and judging on that block would let a stale Max
-    /// identity vouch for the seat that just signed in. Anything but Max is
-    /// refused, including a tier that could not be read, since the operator's
-    /// one address can carry both an Enterprise seat and a personal Max account
-    /// and a login that cannot say which is no evidence that it was the second.
+    /// No recorded identity takes part. A folder logged in before carries the
+    /// earlier login's <c>profile.json</c>, and a login whose tidy-up could not
+    /// run leaves a state file behind too, so nothing on disk proves which login
+    /// wrote the block that names a Max tier; handing any of it to the judgement
+    /// would let a stale Max identity vouch for the seat that just signed in.
+    /// Anything but Max is refused, including a tier that could not be read,
+    /// since the operator's one address can carry both an Enterprise seat and a
+    /// personal Max account and a login that cannot say which is no evidence
+    /// that it was the second. The one exception is a folder that held a pair
+    /// before this login: an unreadable tier there is no proof either way, and
+    /// deleting what may be the earlier, admitted login is the greater harm, so
+    /// that pair is kept and the operator told to remove the account instead.
     /// </para>
     /// </summary>
     private async Task<(LoginSessionState State, string Message)> AdmitAsync(Session session)
@@ -424,10 +544,15 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
         }
 
         (MaxTierVerdict verdict, string? reason) =
-            await ParkedFolderAdmission.JudgeAsync(session.Folder, _profiles, _authStatus, CancellationToken.None);
+            await ParkedFolderAdmission.JudgeFreshLoginAsync(session.Folder, _authStatus, CancellationToken.None);
         if (verdict == MaxTierVerdict.Admitted)
         {
             return (LoginSessionState.Completed, adopted ? "Logged in as " + session.Email.Value + "." : ResidueKeptMessage);
+        }
+
+        if (verdict == MaxTierVerdict.Unknown && session.CredentialFileDigestAtStart is not null)
+        {
+            return (LoginSessionState.Failed, UnjudgedKeptMessage);
         }
 
         return (LoginSessionState.Failed, RefusedPrefix + (reason ?? UnreadableTierReason) + await DiscardAsync(session.Folder));
@@ -550,12 +675,21 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     /// <summary>One login in flight, with the child it drives and the buffer it reads.</summary>
     private sealed class Session : IDisposable
     {
-        public Session(LoginSessionId id, AccountEmail email, string folder, ILoginChild child, DateTimeOffset expiresAt, TimeSpan lifetime, TimeProvider clock)
+        public Session(
+            LoginSessionId id,
+            AccountEmail email,
+            string folder,
+            ILoginChild child,
+            string? credentialFileDigestAtStart,
+            DateTimeOffset expiresAt,
+            TimeSpan lifetime,
+            TimeProvider clock)
         {
             Id = id;
             Email = email;
             Folder = folder;
             Child = child;
+            CredentialFileDigestAtStart = credentialFileDigestAtStart;
             ExpiresAt = expiresAt;
             Lifetime = new CancellationTokenSource(lifetime, clock);
         }
@@ -567,6 +701,18 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
         public string Folder { get; }
 
         public ILoginChild Child { get; }
+
+        /// <summary>
+        /// The digest of the folder's credential file when the child was started,
+        /// or null when there was none. The finish takes a file with the same
+        /// digest for the earlier login, untouched, and any other for this
+        /// login's own. That reading holds only while nothing else writes a
+        /// parked pair between start and finish: the switch and the removal
+        /// already refuse a folder a login is running against, and a parked-pair
+        /// refresh write-back, when one exists, must check the same thing under
+        /// the gate, or its rewrite would be judged as a login that never happened.
+        /// </summary>
+        public string? CredentialFileDigestAtStart { get; }
 
         public DateTimeOffset ExpiresAt { get; }
 

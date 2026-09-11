@@ -167,7 +167,14 @@ All notable changes to this project are documented in this file. The format foll
   under that folder, the pair it wrote is deleted (a switch admits any folder holding one, whatever
   its token is worth), and the session's message names the subscription the CLI reported and says the
   credentials were revoked. The roster entry stays, so the account can be logged in again and the Max
-  account picked instead. A revocation that fails still deletes the pair and says so.
+  account picked instead. A revocation that fails still deletes the pair and says so. The judgement
+  takes no identity the folder records, because a folder logged in before carries the earlier
+  login's `profile.json` and a login whose tidy-up could not run leaves its state file behind, so
+  nothing on disk proves which login wrote a block naming a Max tier. And the guard discards only a
+  pair the login is proven to have written: the credential file is read before the CLI starts and
+  again when it ends, the same bytes are the earlier login left untouched (the session ends the way
+  a login that wrote nothing does), and a pair that was rewritten but whose tier cannot be read is
+  kept, with the message saying to remove the account before switching to it, rather than deleted.
 - Command injection through the `cmd.exe` shim used for an npm-installed CLI. Arguments were joined
   with a space and no quoting, so an account e-mail carrying `&` was read as a command separator and
   the rest of it ran as a second command. Every argument is now one quoted operand at the shared

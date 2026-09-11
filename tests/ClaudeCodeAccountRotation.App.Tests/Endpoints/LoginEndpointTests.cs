@@ -4,7 +4,9 @@ using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.Process;
 using ClaudeCodeAccountRotation.Core.Accounts;
 using ClaudeCodeAccountRotation.Core.Identity;
+using ClaudeCodeAccountRotation.Core.Ports;
 using ClaudeCodeAccountRotation.Core.Switching;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeCodeAccountRotation.App.Tests.Endpoints;
 
@@ -273,6 +275,178 @@ public sealed class LoginEndpointTests
         completed["message"]!.GetValue<string>().ShouldBe("Logged in as " + ParkedEmail + ".");
         factory.Cli.LogoutCalls.ShouldBeEmpty();
         File.Exists(Path.Combine(folder, CredentialFiles.FileName)).ShouldBeTrue();
+    }
+
+    /// <summary>
+    /// A recorded identity with the Max rate-limit tier, the way a folder that
+    /// once held a Max login carries one. Nothing in the folder proves which
+    /// login wrote it, so it must never vouch for the seat that just signed in.
+    /// </summary>
+    private static JsonObject StaleMaxIdentity()
+    {
+        JsonObject identity = AppFactory.AccountJson(ParkedEmail);
+        identity["organizationRateLimitTier"] = "default_claude_max";
+        return identity;
+    }
+
+    private static async Task<byte[]> SeedPairAsync(string folder, string refreshToken, CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(folder);
+        await CredentialFiles.WriteAsync(folder, refreshToken, cancellationToken);
+        return await File.ReadAllBytesAsync(Path.Combine(folder, CredentialFiles.FileName), cancellationToken);
+    }
+
+    [Fact]
+    public async Task AStaleProfileCannotVouchForASeatWhoseAdoptionFailed()
+    {
+        await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
+        string folder = FolderOf(factory, ParkedEmail);
+        Directory.CreateDirectory(folder);
+        await File.WriteAllTextAsync(Path.Combine(folder, "profile.json"), StaleMaxIdentity().ToJsonString(), TestContext.Current.CancellationToken);
+        factory.Cli.SubscriptionType = "enterprise";
+        factory.LoginChild.OnCode = async (child, code) =>
+        {
+            // The pair lands, but the state file names no account, so adoption has
+            // nothing to rewrite the profile from and the stale one stays standing.
+            await CredentialFiles.WriteAsync(child.ConfigDirectory, "refresh-" + child.Email, CancellationToken.None);
+            await File.WriteAllTextAsync(
+                Path.Combine(child.ConfigDirectory, ".claude.json"),
+                new JsonObject { ["numStartups"] = 1 }.ToJsonString(),
+                CancellationToken.None);
+            child.Exit();
+        };
+        using HttpClient client = factory.CreateMutatingClient();
+        JsonObject started = await StartLoginAsync(client, TestContext.Current.CancellationToken);
+
+        JsonObject refused = await SubmitCodeAsync(client, started["id"]!.GetValue<string>(), Code, TestContext.Current.CancellationToken);
+
+        refused["state"]!.GetValue<string>().ShouldBe(nameof(LoginSessionState.Failed));
+        refused["message"]!.GetValue<string>().ShouldBe(RefusedMessage("enterprise"));
+        factory.Cli.LogoutCalls.ShouldBe([folder]);
+        File.Exists(Path.Combine(folder, CredentialFiles.FileName)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task AStaleStateFileCannotVouchForTheSeatThatSignedIn()
+    {
+        await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
+        string folder = FolderOf(factory, ParkedEmail);
+        Directory.CreateDirectory(folder);
+        // What a residue-kept login leaves behind: a state file naming the earlier
+        // account, with its Max tier. Adoption reads it as if it were fresh.
+        await File.WriteAllTextAsync(
+            Path.Combine(folder, ".claude.json"),
+            new JsonObject { ["numStartups"] = 1, ["oauthAccount"] = StaleMaxIdentity() }.ToJsonString(),
+            TestContext.Current.CancellationToken);
+        factory.Cli.SubscriptionType = "enterprise";
+        factory.LoginChild.OnCode = async (child, code) =>
+        {
+            await CredentialFiles.WriteAsync(child.ConfigDirectory, "refresh-" + child.Email, CancellationToken.None);
+            child.Exit();
+        };
+        using HttpClient client = factory.CreateMutatingClient();
+        JsonObject started = await StartLoginAsync(client, TestContext.Current.CancellationToken);
+
+        JsonObject refused = await SubmitCodeAsync(client, started["id"]!.GetValue<string>(), Code, TestContext.Current.CancellationToken);
+
+        refused["state"]!.GetValue<string>().ShouldBe(nameof(LoginSessionState.Failed));
+        refused["message"]!.GetValue<string>().ShouldBe(RefusedMessage("enterprise"));
+        factory.Cli.LogoutCalls.ShouldBe([folder]);
+        File.Exists(Path.Combine(folder, CredentialFiles.FileName)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task AnAbandonedReLoginLeavesTheWorkingPairUntouched()
+    {
+        await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
+        string folder = FolderOf(factory, ParkedEmail);
+        byte[] before = await SeedPairAsync(folder, "refresh-old", TestContext.Current.CancellationToken);
+        // The CLI ends without writing, and then cannot even say what the folder
+        // holds. The pair it never touched is the operator's working login.
+        factory.Cli.ReadError = "claude auth status printed no JSON object";
+        factory.LoginChild.OnCode = static (child, code) =>
+        {
+            child.Exit();
+            return Task.CompletedTask;
+        };
+        using HttpClient client = factory.CreateMutatingClient();
+        JsonObject started = await StartLoginAsync(client, TestContext.Current.CancellationToken);
+
+        JsonObject ended = await SubmitCodeAsync(client, started["id"]!.GetValue<string>(), Code, TestContext.Current.CancellationToken);
+
+        ended["state"]!.GetValue<string>().ShouldBe(nameof(LoginSessionState.Failed));
+        ended["message"]!.GetValue<string>().ShouldContain("left as it was");
+        factory.Cli.LogoutCalls.ShouldBeEmpty();
+        (await File.ReadAllBytesAsync(Path.Combine(folder, CredentialFiles.FileName), TestContext.Current.CancellationToken)).ShouldBe(before);
+    }
+
+    [Fact]
+    public async Task AReLoginThatExpiresLeavesTheWorkingPairUntouched()
+    {
+        await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
+        string folder = FolderOf(factory, ParkedEmail);
+        byte[] before = await SeedPairAsync(folder, "refresh-old", TestContext.Current.CancellationToken);
+        factory.Cli.ReadError = "claude auth status printed no JSON object";
+        using HttpClient client = factory.CreateMutatingClient();
+        JsonObject started = await StartLoginAsync(client, TestContext.Current.CancellationToken);
+        string id = started["id"]!.GetValue<string>();
+
+        factory.Clock.Advance(TimeSpan.FromMinutes(10));
+        JsonObject expired = (await client.GetFromJsonAsync<JsonObject>(SessionPath(id), TestContext.Current.CancellationToken))!;
+        // Expiry settles the session in the request; the folder is finished on the
+        // pump afterwards, and that finish is what must leave the pair alone.
+        var runner = (ClaudeCliLoginSessionRunner)factory.Services.GetRequiredService<ILoginSessionRunner>();
+        await runner.FinishedAsync(new LoginSessionId(id)).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        JsonObject after = (await client.GetFromJsonAsync<JsonObject>(SessionPath(id), TestContext.Current.CancellationToken))!;
+
+        expired["state"]!.GetValue<string>().ShouldBe(nameof(LoginSessionState.Expired));
+        after["state"]!.GetValue<string>().ShouldBe(nameof(LoginSessionState.Expired));
+        factory.Cli.LogoutCalls.ShouldBeEmpty();
+        (await File.ReadAllBytesAsync(Path.Combine(folder, CredentialFiles.FileName), TestContext.Current.CancellationToken)).ShouldBe(before);
+    }
+
+    [Fact]
+    public async Task AnUnjudgeableRewriteOfAnExistingPairIsKeptAndNamed()
+    {
+        await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
+        string folder = FolderOf(factory, ParkedEmail);
+        await SeedPairAsync(folder, "refresh-old", TestContext.Current.CancellationToken);
+        // The file changed under the login, and the CLI cannot say what signed in.
+        // The folder held an admitted login before this one, so nothing proves the
+        // pair is the new login's to delete: keep it and say what to do.
+        factory.Cli.ReadError = "claude auth status printed no JSON object";
+        factory.LoginChild.OnCode = async (child, code) =>
+        {
+            await CredentialFiles.WriteAsync(child.ConfigDirectory, "refresh-new", CancellationToken.None);
+            child.Exit();
+        };
+        using HttpClient client = factory.CreateMutatingClient();
+        JsonObject started = await StartLoginAsync(client, TestContext.Current.CancellationToken);
+
+        JsonObject kept = await SubmitCodeAsync(client, started["id"]!.GetValue<string>(), Code, TestContext.Current.CancellationToken);
+
+        kept["state"]!.GetValue<string>().ShouldBe(nameof(LoginSessionState.Failed));
+        kept["message"]!.GetValue<string>().ShouldContain("could not be checked");
+        kept["message"]!.GetValue<string>().ShouldContain("Remove the account from the roster");
+        factory.Cli.LogoutCalls.ShouldBeEmpty();
+        (await File.ReadAllTextAsync(Path.Combine(folder, CredentialFiles.FileName), TestContext.Current.CancellationToken)).ShouldContain("refresh-new");
+    }
+
+    [Fact]
+    public async Task AReLoginThatCompletesAsMaxReplacesTheOldPair()
+    {
+        await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
+        string folder = FolderOf(factory, ParkedEmail);
+        await SeedPairAsync(folder, "refresh-old", TestContext.Current.CancellationToken);
+        factory.LoginChild.OnCode = LoginChildScript.CompleteLoginAsync;
+        using HttpClient client = factory.CreateMutatingClient();
+        JsonObject started = await StartLoginAsync(client, TestContext.Current.CancellationToken);
+
+        JsonObject completed = await SubmitCodeAsync(client, started["id"]!.GetValue<string>(), Code, TestContext.Current.CancellationToken);
+
+        completed["state"]!.GetValue<string>().ShouldBe(nameof(LoginSessionState.Completed));
+        factory.Cli.LogoutCalls.ShouldBeEmpty();
+        (await File.ReadAllTextAsync(Path.Combine(folder, CredentialFiles.FileName), TestContext.Current.CancellationToken)).ShouldContain("refresh-" + ParkedEmail);
     }
 
     [Fact]

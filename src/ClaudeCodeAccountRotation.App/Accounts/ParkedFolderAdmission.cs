@@ -9,12 +9,33 @@ namespace ClaudeCodeAccountRotation.App.Accounts;
 /// <summary>
 /// The one tier judgement for a folder that is not the live directory, asked
 /// both when an account joins the roster and at the end of a login into that
-/// folder. Both put the same question to the same two sources: the identity the
-/// folder records, and the CLI's own <c>auth status --json</c> run under it
-/// whenever there is a login there to read.
+/// folder. The roster asks two sources, the identity the folder records and
+/// the CLI's own <c>auth status --json</c> run under it whenever there is a
+/// login there to read; the login asks the CLI alone, for the reason on
+/// <see cref="JudgeFreshLoginAsync"/>.
 /// </summary>
 internal static class ParkedFolderAdmission
 {
+    /// <summary>
+    /// Judges the login that just ended in <paramref name="folderPath"/>, which
+    /// holds the pair it wrote, from the CLI's answer alone. The identity the
+    /// folder records is not consulted: a folder logged in before carries the
+    /// earlier login's <c>profile.json</c>, and a login whose tidy-up could not
+    /// run leaves its state file standing, so nothing on disk proves which login
+    /// wrote a block that names a Max tier, and a block that cannot be tied to
+    /// this login is no evidence about the seat that just signed in.
+    /// </summary>
+    public static async Task<(MaxTierVerdict Verdict, string? Reason)> JudgeFreshLoginAsync(
+        string folderPath,
+        IClaudeCliAuthStatus cli,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(folderPath);
+        ArgumentNullException.ThrowIfNull(cli);
+        Result<ClaudeAuthStatus, string> status = await cli.ReadAsync(folderPath, cancellationToken);
+        return MaxTierAdmission.Evaluate(status.IsSuccess ? status.Value : null, account: null);
+    }
+
     /// <summary>
     /// Judges <paramref name="folderPath"/>, which must exist. A folder holding
     /// no credential pair is judged from its recorded identity alone; spawning
