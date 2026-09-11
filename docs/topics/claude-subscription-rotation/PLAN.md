@@ -585,7 +585,7 @@ One executable, a config template, one login, working dashboard on a fresh Windo
 - `gh release view <tag> -R melodic-software/claude-code-account-rotation --json assets -q '.assets[].name'` lists `claude-code-account-rotation-win-x64.exe` and `config.template.json`.
 - Laptop (human): dashboard reachable; `profilesRoot` override honored; recorded in `tests/acceptance/README.md`.
 
-### Phase 6: `rate-limit-guard` tee `account` field (separate repository and PR) [DOING]
+### Phase 6: `rate-limit-guard` tee `account` field (separate repository and PR) [DONE]
 
 Review: security
 
@@ -658,7 +658,11 @@ to 5 except that Phase 2's `RateLimitGuardTeeFileReader` already parses the key 
   CI lane green; squash-merged 2026-09-06 as claude-code-plugins#3778, rate-limit-guard `0.8.0` is
   live on the marketplace `main`. Phase 6 stays DOING for 6.6, which lands with Phase 2 here.) Open the PR with `/source-control:pull-request`; body references #1218, lists the
   consumers from 6.1, carries the timing numbers, and names the reader-side follow-up as out of scope.
-- [ ] **6.6** In this repo, `DashboardAssembler` treats a tee snapshot for the live account as
+- [x] **6.6** (2026-09-10: landed with Phase 2's `DashboardAssembler`;
+  `DashboardAssemblerTests.PreSwitchWindowsAreUnattributed` and
+  `RateLimitGuardTeeFileReaderTests.ParsesAccountEmailWhenPresent` pass on `main`; the same day the
+  work machine's card showed the snapshot attributed to the tee's `account.email` after
+  rate-limit-guard 0.8.9's drain.) In this repo, `DashboardAssembler` treats a tee snapshot for the live account as
   unattributed ("pre-switch windows") when its `resets_at` values equal the outgoing account's last
   known values after a switch the tool performed, until the first snapshot whose values differ.
 

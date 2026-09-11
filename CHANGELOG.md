@@ -8,6 +8,11 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
+- `GET /healthz` is served by the framework's own health-check middleware rather than a hand-rolled
+  route, with no checks registered: it is a liveness probe and nothing more. The body is now the
+  status word `Healthy` as `text/plain` instead of a small JSON object, and the response carries the
+  `Cache-Control: no-store, no-cache` headers the middleware writes, so an intermediary never answers
+  the probe from a cache. Nothing in the repository parsed the old body.
 - Renamed the project to `claude-code-account-rotation` (#5): the repository, the executable, the
   User-Agent product token, the per-user app data directory, the mutation header
   (`X-Claude-Code-Account-Rotation`), the solution and project names, and the
@@ -16,6 +21,12 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- A repo-level `nuget.config` that clears every inherited package source and names nuget.org as the
+  only one, for restore, audit, and package-source mapping alike. `dotnet restore --locked-mode`
+  then resolves the same way on a developer machine whose user-level NuGet configuration enables
+  other feeds as it does on CI, instead of failing with NU1507 because more than one source could
+  serve a package. The committed lock files record package identities, not sources, so they are
+  unchanged.
 - The browser profiles this machine already has are discovered rather than typed. Each
   Chromium-family browser publishes its own profiles in its `Local State` file: the profile
   directory, the name the browser shows for it, and usually the address signed into it. A new port

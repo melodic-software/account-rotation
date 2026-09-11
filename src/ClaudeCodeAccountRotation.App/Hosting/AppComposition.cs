@@ -118,6 +118,8 @@ internal static class AppComposition
         services.AddHostedService<InstanceLockHolder>();
         services.AddHostedService<StartupReconciliation>();
         services.AddHostedService<StateFileWatcher>();
+        // No checks registered: liveness only. MapRoutes maps the /healthz route this serves.
+        services.AddHealthChecks();
 
         // Loopback only: the page is a local control surface, never a network service.
         builder.WebHost.ConfigureKestrel(kestrel => kestrel.ListenLocalhost(configuration.ListenPort));
@@ -137,7 +139,9 @@ internal static class AppComposition
             FileProvider = new EmbeddedFileProvider(typeof(AppComposition).Assembly, "ClaudeCodeAccountRotation.App.wwwroot"),
         });
 
-        app.MapGet("/healthz", static () => Results.Ok(new { status = "ok" }));
+        // The framework's liveness probe with no checks registered: the body is the
+        // status word and the middleware writes the no-store cache headers itself.
+        app.MapHealthChecks("/healthz");
         app.MapGet("/", static () => Results.Content(EmbeddedPage.IndexHtml, "text/html; charset=utf-8"));
         DashboardEndpoints.Map(app);
         SwitchEndpoints.Map(app);
