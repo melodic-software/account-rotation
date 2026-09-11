@@ -95,7 +95,7 @@ Standards grounding: no standards index exists at `docs/standards/` and no `.cla
 the repo's only rule file is the ambient `pr-body-contract.md`. Scale is Small (three source files,
 two test files, changelog), so ecosystem defaults apply and nothing further was pulled.
 
-### Phase 1: The credential-file digest and the identity-free judgement [TODO]
+### Phase 1: The credential-file digest and the identity-free judgement [DOING]
 
 Work items, in order:
 
