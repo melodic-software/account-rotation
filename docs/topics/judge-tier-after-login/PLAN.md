@@ -95,7 +95,7 @@ Standards grounding: no standards index exists at `docs/standards/` and no `.cla
 the repo's only rule file is the ambient `pr-body-contract.md`. Scale is Small (three source files,
 two test files, changelog), so ecosystem defaults apply and nothing further was pulled.
 
-### Phase 1: The credential-file digest and the identity-free judgement [DOING]
+### Phase 1: The credential-file digest and the identity-free judgement [DONE]
 
 Work items, in order:
 
@@ -175,6 +175,17 @@ Work items, in order:
 - `grep -c "JudgeFreshLoginAsync" src/ClaudeCodeAccountRotation.App/Accounts/ParkedFolderAdmission.cs src/ClaudeCodeAccountRotation.App/Adapters/Process/ClaudeCliLoginSessionRunner.cs` prints at least 1 for each file.
 - `git diff main -- src/ClaudeCodeAccountRotation.Core/Accounts/MaxTierAdmission.cs` is empty.
 - `gh api graphql` on PR #45 `reviewThreads` shows `isResolved: true` for both thread ids; `gh pr view 45 --json state` prints `MERGED`.
+
+**Done:** the two fixes and six tests landed in `5be58d3` (five red first, one characterisation);
+`dotnet test -c Release` went from 333 on the rebased baseline to 339. A fresh-context phase
+verifier confirmed every due criterion; the code and security lanes found no blocker and five small
+follow-ups, folded in as `c6f3b34` with four more tests (three red first, one pin): the judgement
+runs before adoption and a kept-but-unjudged folder is left whole, the finish takes the gate without
+a pre-gate existence check, a fault while finishing settles the session with a fixed message, the
+finish hook throws on an unknown id and a session is published with its pump, and the expiry message
+the pump writes unwatched is pinned. 343 tests, 0 failed, 1 skipped; build with 0 warnings; format,
+typos, markdownlint, and the machine-path check clean. Both `[FALLBACK]` dispositions stand as
+written. The thread replies, resolves, PR body update, and merge are the remaining items of step 6.
 
 ## Blast radius
 
