@@ -8,6 +8,17 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
+- Discovered browser profiles are listed in the order an operator reads them: `Default` first, then
+  `Profile N` by the number, then any other directory name, within each browser. The browser's own
+  `Local State` lists them in whatever order it wrote them, which is a deletion history (the directory
+  counter never goes down), so the picker used to show `Profile 10` before `Profile 2` and every gap
+  as if it meant something. Nothing about the persisted mapping changes: the roster still stores the
+  directory name and the launcher still passes it verbatim.
+- The roster card names the mapped browser profile the way the browser does (`edge / Personal
+  (Profile 4)`) when the discovered catalog can resolve the pair, and shows the bare directory as
+  before when it cannot.
+- The read-only `GET /api/login-sessions/{id}` route records in code why it sits outside the
+  same-origin mutation filter, beside the other reads (#43). No behaviour change.
 - `GET /healthz` is served by the framework's own health-check middleware rather than a hand-rolled
   route, with no checks registered: it is a liveness probe and nothing more. The body is now the
   status word `Healthy` as `text/plain` instead of a small JSON object, and the response carries the
@@ -136,6 +147,15 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Security
 
+- `POST /api/accounts` and `PATCH /api/accounts/{email}` refuse a `browserProfileDirectory` that is
+  not a single plain directory name (a path separator or another character no directory name can
+  hold, `.` or `..` or a trailing dot, a control character, a reserved device name, leading or
+  trailing whitespace, or more than 255 characters) with a 400 and store nothing, and the browser
+  launcher holds the same rule for a name the roster file already carries, refusing the launch with
+  the reason instead of emitting the switch (#43). The value becomes `--profile-directory=<value>`
+  verbatim, which the browser appends to its own user-data directory without normalising it, so a
+  dot-segment walks elsewhere and a trailing dot or an NTFS stream suffix aliases a sibling profile on
+  Windows.
 - Command injection through the `cmd.exe` shim used for an npm-installed CLI. Arguments were joined
   with a space and no quoting, so an account e-mail carrying `&` was read as a command separator and
   the rest of it ran as a second command. Every argument is now one quoted operand at the shared

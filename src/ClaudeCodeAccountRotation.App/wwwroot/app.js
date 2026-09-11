@@ -79,6 +79,14 @@
     return select;
   }
 
+  // The card names the profile the way the browser does when the catalog knows
+  // it, with the directory kept in parentheses because that is what the
+  // launcher uses; a directory the enumeration never saw is shown as itself.
+  function profileCardLabel(browser, directory) {
+    var index = indexOfProfile(browser, directory);
+    return index >= 0 ? profileCatalog[index].name + " (" + directory + ")" : directory;
+  }
+
   function indexOfProfile(browser, directory) {
     for (var i = 0; i < profileCatalog.length; i++) {
       if (profileCatalog[i].browser === browser && profileCatalog[i].directory === directory) { return i; }
@@ -405,7 +413,7 @@
       card.appendChild(badges);
 
       if (roster && roster.browser) {
-        card.appendChild(element("p", "muted", roster.browser + (roster.browserProfileDirectory ? " / " + roster.browserProfileDirectory : "")));
+        card.appendChild(element("p", "muted", roster.browser + (roster.browserProfileDirectory ? " / " + profileCardLabel(roster.browser, roster.browserProfileDirectory) : "")));
       }
 
       var actions = element("div", "actions");

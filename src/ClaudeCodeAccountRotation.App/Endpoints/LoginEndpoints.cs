@@ -99,6 +99,18 @@ internal static class LoginEndpoints
                 : Results.Ok(View(submitted.Value, browserError: null));
         });
 
+        // Mapped on the bare routes, outside the same-origin mutation filter, on
+        // purpose: this is a read, like /api/dashboard and /api/browser-profiles.
+        // The filter exists to stop a cross-origin page from changing state
+        // through a request the browser would send anyway; a cross-origin GET
+        // cannot read this response at all without CORS (none is registered, and
+        // the host guards refuse a rebound name), and what it carries, the
+        // session state and the sign-in URL, is what the POST that created the
+        // session already handed the same page. Guarding reads on the loopback
+        // surface is #7's per-instance token, for every read at once; putting
+        // this one behind the mutation filter would demand a mutation header
+        // and an Origin from a request that mutates nothing. (The page does not
+        // poll this route today; it posts the code and re-reads the dashboard.)
         routes.MapGet("/api/login-sessions/{id}", static (string id, ILoginSessionRunner runner) =>
             runner.Status(new LoginSessionId(id)) is LoginSession session
                 ? Results.Ok(View(session, browserError: null))

@@ -118,6 +118,58 @@ public sealed class RosterEndpointTests
         card["roster"]!["paused"]!.GetValue<bool>().ShouldBeTrue();
     }
 
+    [Theory]
+    // The directory becomes "--profile-directory=<value>", which the browser
+    // resolves under its User Data directory: a separator or a dot-segment
+    // would point the login at a profile the roster never named. One segment,
+    // exactly as the browser wrote it, is the only shape that goes through.
+    [InlineData("../../Other")]
+    [InlineData("Profile 3/..")]
+    [InlineData("Profile\\3")]
+    [InlineData("..")]
+    [InlineData(".")]
+    [InlineData(" Profile 3")]
+    [InlineData("Profile 3 ")]
+    // Windows resolves each of these to something other than the literal name:
+    // a stripped trailing dot, an NTFS stream, a device, a control character.
+    [InlineData("Profile 3.")]
+    [InlineData("Default::$INDEX_ALLOCATION")]
+    [InlineData("CON")]
+    [InlineData("nul.txt")]
+    [InlineData("COM¹")]
+    [InlineData("LPT².txt")]
+    [InlineData("Profile\t3")]
+    public async Task AddRefusesADirectoryThatIsNotASinglePathSegment(string directory)
+    {
+        await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PostAsJsonAsync(
+            _accounts,
+            new { email = NewEmail, browser = "edge", browserProfileDirectory = directory },
+            TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.BadRequest);
+        JsonObject body = (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!;
+        body["error"]!.GetValue<string>().ShouldContain("directory");
+        (await StoredRosterAsync(factory, TestContext.Current.CancellationToken)).Entries.ShouldBeEmpty();
+        Directory.Exists(FolderOf(factory, NewEmail)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task PatchRefusesADirectoryThatIsNotASinglePathSegmentAndKeepsTheOldOne()
+    {
+        await using AppFactory factory = await LiveOnAsync(TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        await client.PostAsJsonAsync(_accounts, new { email = NewEmail, browser = "edge", browserProfileDirectory = "Profile 3" }, TestContext.Current.CancellationToken);
+
+        using HttpResponseMessage response = await client.PatchAsJsonAsync(Account(NewEmail), new { browserProfileDirectory = "..\\Profile 4" }, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.BadRequest);
+        RosterEntry stored = (await StoredRosterAsync(factory, TestContext.Current.CancellationToken)).Find(Email(NewEmail))!;
+        stored.BrowserProfileDirectory.ShouldBe("Profile 3");
+    }
+
     [Fact]
     public async Task PatchLeavesTheFieldsItDoesNotMention()
     {

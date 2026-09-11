@@ -34,6 +34,22 @@ public sealed class ChromiumFamilyBrowserLauncherTests
     }
 
     [Fact]
+    // The roster file can carry a name an older build or a hand edit let
+    // through; the launcher is the last hop and refuses it rather than handing
+    // the browser a switch value that walks out of its user-data directory.
+    public void AProfileDirectoryThatIsNotASingleNameIsRefusedAndNothingIsStarted()
+    {
+        Recorder recorder = new();
+        ChromiumFamilyBrowserLauncher launcher = new(ChromeAt(Path.Combine(Path.GetTempPath(), "chrome.exe")), _ => true, recorder.Start);
+
+        Result<Unit, string> launched = launcher.Launch(BrowserFamily.Chrome, "..\\Other", _signInUrl);
+
+        launched.IsFailure.ShouldBeTrue();
+        launched.Error.ShouldContain("browser profile");
+        recorder.Started.ShouldBeEmpty();
+    }
+
+    [Fact]
     public void NoProfileDirectoryPassesTheUrlAlone()
     {
         Recorder recorder = new();

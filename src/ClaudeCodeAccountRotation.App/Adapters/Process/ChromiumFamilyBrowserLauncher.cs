@@ -41,7 +41,17 @@ internal sealed class ChromiumFamilyBrowserLauncher : IBrowserLauncher
         List<string> arguments = [];
         if (!string.IsNullOrWhiteSpace(profileDirectory))
         {
-            arguments.Add("--profile-directory=" + profileDirectory);
+            // The roster endpoints refuse a bad name on the way in, but the roster
+            // file can be written by an older build, a restore, or a hand edit, so
+            // the last hop before the process holds the same rule: nothing this
+            // adapter cannot vouch for becomes a switch value.
+            Result<string, string> directory = BrowserProfileDirectory.Parse(profileDirectory);
+            if (directory.IsFailure)
+            {
+                return Result<Unit, string>.Failure("the mapped browser profile was not used: " + directory.Error);
+            }
+
+            arguments.Add("--profile-directory=" + directory.Value);
         }
 
         arguments.Add(signInUrl.AbsoluteUri);
