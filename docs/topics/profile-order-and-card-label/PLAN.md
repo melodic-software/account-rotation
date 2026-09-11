@@ -87,7 +87,11 @@ unbounded length) and its note that the launcher trusted the roster file as writ
 the rule moved into `Core.Accounts.BrowserProfileDirectory`, shared by the endpoints and the
 launcher (five more refused shapes in the endpoint Theory, one launcher refusal test), and the
 login-session comment's "no more sensitive than the dashboard" claim was reworded to the property
-actually defended.
+actually defended. A second fresh-context verifier on the final diff passed seven criteria and failed
+one sentence of that same comment (it said the page polls the route; the page only posts the code),
+which is corrected in the closing commit; the live drive was repeated at the final commit with the
+same DOM reads plus the new refused shapes (`Profile 3.`, `CON`, an NTFS stream suffix, and a PATCH to
+a trailing dot, all 400).
 
 Work items, in order:
 

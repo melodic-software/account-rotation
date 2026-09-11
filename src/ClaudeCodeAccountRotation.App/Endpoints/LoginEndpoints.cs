@@ -108,9 +108,9 @@ internal static class LoginEndpoints
         // session state and the sign-in URL, is what the POST that created the
         // session already handed the same page. Guarding reads on the loopback
         // surface is #7's per-instance token, for every read at once; putting
-        // this one behind the mutation filter would only make the page's own
-        // status poll carry a mutation header for a request that mutates
-        // nothing.
+        // this one behind the mutation filter would demand a mutation header
+        // and an Origin from a request that mutates nothing. (The page does not
+        // poll this route today; it posts the code and re-reads the dashboard.)
         routes.MapGet("/api/login-sessions/{id}", static (string id, ILoginSessionRunner runner) =>
             runner.Status(new LoginSessionId(id)) is LoginSession session
                 ? Results.Ok(View(session, browserError: null))
