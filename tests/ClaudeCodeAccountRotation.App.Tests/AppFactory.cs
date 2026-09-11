@@ -67,6 +67,14 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
 
     public BrowserRecorder Browser { get; } = new();
 
+    /// <summary>
+    /// What the machine's browsers are said to publish. Doubled like every other
+    /// out-of-process port: the real reader would read this developer's own
+    /// <c>Local State</c>, which is neither this machine's business to expose nor
+    /// something a test can assert against.
+    /// </summary>
+    public CannedBrowserProfiles BrowserProfiles { get; } = new();
+
     /// <summary>Every log line the host wrote, so a test can assert what never reaches one.</summary>
     public LogSink Logs { get; } = new();
 
@@ -107,6 +115,7 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
             // Both ports, or a removal would resolve the real CLI on this machine.
             services.Replace(ServiceDescriptor.Singleton<IClaudeCliLogout>(Cli));
             services.Replace(ServiceDescriptor.Singleton<IBrowserLauncher>(Browser));
+            services.Replace(ServiceDescriptor.Singleton<IBrowserProfileReader>(BrowserProfiles));
             // The real runner over a scripted child: the URL parsing, the retry, the
             // expiry, and the profile rewrite are the code under test, not doubles.
             services.Replace(ServiceDescriptor.Singleton<ILoginSessionRunner>(provider => new ClaudeCliLoginSessionRunner(
@@ -146,6 +155,15 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
             Launched.Add((browser, profileDirectory, signInUrl));
             return Result<Unit, string>.Success(Unit.Value);
         }
+    }
+
+    /// <summary>The browser profiles a test says this machine publishes.</summary>
+    internal sealed class CannedBrowserProfiles : IBrowserProfileReader
+    {
+        public List<BrowserProfile> Found { get; } = [];
+
+        public Task<IReadOnlyList<BrowserProfile>> ReadAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<BrowserProfile>>(Found);
     }
 
     /// <summary>Collects every formatted log message the host writes.</summary>

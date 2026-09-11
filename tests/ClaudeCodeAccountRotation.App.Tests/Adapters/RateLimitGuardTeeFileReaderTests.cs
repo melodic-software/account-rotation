@@ -157,7 +157,7 @@ public sealed class RateLimitGuardTeeFileReaderTests : IDisposable
         }
     }
 
-    private static void DenyReading(string path)
+    internal static void DenyReading(string path)
     {
         if (OperatingSystem.IsWindows())
         {
@@ -169,7 +169,7 @@ public sealed class RateLimitGuardTeeFileReaderTests : IDisposable
         }
     }
 
-    private static void AllowReading(string path)
+    internal static void AllowReading(string path)
     {
         if (OperatingSystem.IsWindows())
         {

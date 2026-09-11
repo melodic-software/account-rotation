@@ -58,16 +58,30 @@ internal sealed class ChromiumFamilyBrowserLauncher : IBrowserLauncher
         return Result<Unit, string>.Success(Unit.Value);
     }
 
+    /// <summary>
+    /// The vendor's own directory segment on Windows, which names both the
+    /// install location under Program Files and the user data location under
+    /// the local app data root. One switch, so the profile reader and the
+    /// launcher can never disagree about where a browser keeps itself.
+    /// </summary>
+    internal static string WindowsVendorPath(BrowserFamily browser) => browser switch
+    {
+        BrowserFamily.Chrome => Path.Combine("Google", "Chrome"),
+        BrowserFamily.Edge => Path.Combine("Microsoft", "Edge"),
+        _ => Path.Combine("BraveSoftware", "Brave-Browser"),
+    };
+
     /// <summary>The candidate install locations for a browser on this platform, most likely first.</summary>
     internal static IReadOnlyList<string> KnownInstallPaths(BrowserFamily browser)
     {
         if (OperatingSystem.IsWindows())
         {
-            (string vendor, string executable) = browser switch
+            string vendor = WindowsVendorPath(browser);
+            string executable = browser switch
             {
-                BrowserFamily.Chrome => (Path.Combine("Google", "Chrome"), "chrome.exe"),
-                BrowserFamily.Edge => (Path.Combine("Microsoft", "Edge"), "msedge.exe"),
-                _ => (Path.Combine("BraveSoftware", "Brave-Browser"), "brave.exe"),
+                BrowserFamily.Chrome => "chrome.exe",
+                BrowserFamily.Edge => "msedge.exe",
+                _ => "brave.exe",
             };
             Environment.SpecialFolder[] roots =
             [
