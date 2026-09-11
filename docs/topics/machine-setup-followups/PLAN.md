@@ -166,7 +166,18 @@ Work items, in order:
 - `gh api graphql` listing PR 51's review threads shows `isResolved: true` for both; `gh pr view 51 --json state -q .state` prints `MERGED`.
 - `dotnet test -c Release` on the branch before push: `failed: 0`, total ≥ 311 (the PR body's count; recorded once as the pin when observed).
 
-### Phase 2: The chore branch: nuget.config, PLAN 6.6, and the framework health endpoint [DOING]
+### Phase 2: The chore branch: nuget.config, PLAN 6.6, and the framework health endpoint [DONE]
+
+Done 2026-09-11 as PR #53 (`chore/machine-setup-followups`, four commits: build, docs(plan),
+refactor(hosting), and a one-line docs(hosting) comment from the architecture review). Sanity checks:
+`dotnet restore --locked-mode` with no `--source` exit 0 and one enabled source in the repo config;
+6.6 `[x]` 1, `Phase 6: … [DONE]` 1, open `6.x` 0; `MapHealthChecks("/healthz")` 1, `MapGet("/healthz"`
+0, `AddHealthChecks` 1, `PackageReference` 0, no lock-file drift; a real Kestrel instance on 48222
+answered `200`, `Content-Type: text/plain`, `Cache-Control: no-store, no-cache`, `Healthy`;
+`dotnet test -c Release`: 311 total, 0 failed, 1 skipped; build 0 warnings; format, typos,
+editorconfig, and the machine-path gate clean. Review: code and architecture lanes, no findings; the
+ubuntu CI restore answered the lowercase-filename question; five checks green; Codex completed with
+no findings.
 
 Branch: `chore/machine-setup-followups` from `main` (after Phase 1's merge, so it already carries #51
 and the one shared file, `AppComposition.cs`, is edited once on top of the merged line).
