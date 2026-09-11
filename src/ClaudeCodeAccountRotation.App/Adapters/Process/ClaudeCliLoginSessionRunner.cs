@@ -72,6 +72,9 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     private const string UnjudgedMessage =
         "Another credential change held the lock, so what kind of account signed in could not be checked."
         + " Remove the account from the roster, which revokes that login, before switching to it.";
+    private const string FaultedMessage =
+        "Judging what kind of account signed in failed, so the credentials in that folder were left in place."
+        + " Remove the account from the roster, which revokes that login, before switching to it.";
 
     private readonly LoginChildFactory _start;
     private readonly ProfileFolderStore _profiles;
@@ -183,6 +186,10 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
             }
 
             session = new Session(LoginSessionId.New(), email, folder, child.Value, digestAtStart, _clock.GetUtcNow() + SessionLifetime, SessionLifetime, _clock);
+            // Started under the gate, so a session anything can find already has its
+            // pump. The pump's own finish takes the gate in turn and waits on it
+            // until the finally below releases it, which is at once.
+            session.Pump = Task.Run(() => PumpAsync(session), CancellationToken.None);
             _sessions[session.Id.Value] = session;
         }
         finally
@@ -190,10 +197,7 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
             permit?.Dispose();
         }
 
-        // Outside the gate: the pump's own finish takes it, and the wait below can
-        // outlast the child.
-        session.Pump = Task.Run(() => PumpAsync(session), CancellationToken.None);
-
+        // Outside the gate: only the wait for the URL, which can outlast the child.
         await WaitAsync(session.Started.Task, cancellationToken);
         if (session.SignInUrl is null)
         {
@@ -292,13 +296,16 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     }
 
     /// <summary>
-    /// Completes once the session's pump has finished the folder, or at once for
-    /// an unknown session. Expiry settles a session inside the request that
-    /// notices it, and the folder is finished on the pump afterwards; a test
-    /// asserting on what that finish left behind has nothing else to await.
+    /// Completes once the session's pump has finished the folder. Expiry settles a
+    /// session inside the request that notices it, and the folder is finished on
+    /// the pump afterwards; a test asserting on what that finish left behind has
+    /// nothing else to await, and an id no session answers to is that test waiting
+    /// for nothing, so it throws rather than completing.
     /// </summary>
     internal Task FinishedAsync(LoginSessionId id) =>
-        _sessions.TryGetValue(id.Value, out Session? session) ? session.Pump : Task.CompletedTask;
+        _sessions.TryGetValue(id.Value, out Session? session)
+            ? session.Pump
+            : throw new ArgumentException("no login session " + id.Value, nameof(id));
 
     public void Dispose()
     {
@@ -407,16 +414,9 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     /// </summary>
     private async Task FinishAsync(Session session)
     {
-        if (!File.Exists(Path.Combine(session.Folder, FileSystemCredentialPairStore.FileName)))
-        {
-            SettleUnwritten(session, ExpiredMessage, EndedMessage);
-            return;
-        }
-
-        // The folder holds a pair. Every way the rest can fail is caught here: a
-        // fault escaping would leave the session pending behind a killed child
-        // until its expiry, and the operator watching a completed login say "still
-        // waiting" for ten minutes.
+        // Every way the rest can fail is caught here: a fault escaping would leave
+        // the session pending behind a killed child until its expiry, and the
+        // operator watching a completed login say "still waiting" for ten minutes.
         try
         {
             // The whole of it under one permit. Reading the pair, judging the tier,
@@ -438,8 +438,8 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
 
             if (digest is null)
             {
-                // Gone between the check above and the read: moved by something that
-                // held the gate first. Nothing here to judge.
+                // The folder holds no pair: either the login never wrote one, or
+                // something that held the gate first moved it. Nothing here to judge.
                 SettleUnwritten(session, ExpiredMessage, EndedMessage);
                 return;
             }
@@ -459,6 +459,17 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
             // gate, so an unjudged pair is left exactly where it is and the operator
             // is told to remove the account rather than switch to it.
             Settle(session, LoginSessionState.Failed, UnjudgedMessage);
+        }
+#pragma warning disable CA1031 // Do not catch general exception types
+        catch (Exception)
+#pragma warning restore CA1031
+        {
+            // Anything else that went wrong is still not a judgement, and the folder
+            // holds whatever the login left; the session says so rather than hanging.
+            // The fault's own text stays out of it: a message built from one could
+            // carry a path off this machine onto the page, the way nothing built from
+            // the child's output ever does.
+            Settle(session, LoginSessionState.Failed, FaultedMessage);
         }
     }
 
@@ -507,10 +518,10 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     }
 
     /// <summary>
-    /// Adopts the fresh login, then judges the tier of the account that actually
-    /// signed in, under that account's own folder and against the same
-    /// <see cref="MaxTierAdmission"/> the roster admits by, from the CLI's answer
-    /// alone.
+    /// Judges the tier of the account that actually signed in, under that
+    /// account's own folder and against the same <see cref="MaxTierAdmission"/>
+    /// the roster admits by, from the CLI's answer alone, and adopts the fresh
+    /// login only once that judgement is in.
     /// <para>
     /// No recorded identity takes part. A folder logged in before carries the
     /// earlier login's <c>profile.json</c>, and a login whose tidy-up could not
@@ -524,10 +535,23 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
     /// before this login: an unreadable tier there is no proof either way, and
     /// deleting what may be the earlier, admitted login is the greater harm, so
     /// that pair is kept and the operator told to remove the account instead.
+    /// Nothing is adopted on that branch, which is why the judgement comes first:
+    /// a folder whose credentials are kept keeps the profile and the residue that
+    /// belong with them, rather than rewritten in the name of a login nothing could
+    /// vouch for. The refused branch does adopt, deliberately, before the pair is
+    /// discarded: if the delete fails, the rewritten profile names the refused
+    /// seat instead of leaving a stale Max one beside a new pair.
     /// </para>
     /// </summary>
     private async Task<(LoginSessionState State, string Message)> AdmitAsync(Session session)
     {
+        (MaxTierVerdict verdict, string? reason) =
+            await ParkedFolderAdmission.JudgeFreshLoginAsync(session.Folder, _authStatus, CancellationToken.None);
+        if (verdict == MaxTierVerdict.Unknown && session.CredentialFileDigestAtStart is not null)
+        {
+            return (LoginSessionState.Failed, UnjudgedKeptMessage);
+        }
+
         bool adopted;
         try
         {
@@ -543,16 +567,9 @@ internal sealed partial class ClaudeCliLoginSessionRunner : ILoginSessionRunner,
             adopted = false;
         }
 
-        (MaxTierVerdict verdict, string? reason) =
-            await ParkedFolderAdmission.JudgeFreshLoginAsync(session.Folder, _authStatus, CancellationToken.None);
         if (verdict == MaxTierVerdict.Admitted)
         {
             return (LoginSessionState.Completed, adopted ? "Logged in as " + session.Email.Value + "." : ResidueKeptMessage);
-        }
-
-        if (verdict == MaxTierVerdict.Unknown && session.CredentialFileDigestAtStart is not null)
-        {
-            return (LoginSessionState.Failed, UnjudgedKeptMessage);
         }
 
         return (LoginSessionState.Failed, RefusedPrefix + (reason ?? UnreadableTierReason) + await DiscardAsync(session.Folder));

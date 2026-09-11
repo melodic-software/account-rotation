@@ -406,6 +406,40 @@ public sealed class LoginEndpointTests
     }
 
     [Fact]
+    public async Task AReLoginWhoseChildOutlivesTheExpiryStillLeavesTheWorkingPairUntouched()
+    {
+        await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
+        string folder = FolderOf(factory, ParkedEmail);
+        byte[] before = await SeedPairAsync(folder, "refresh-old", TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateMutatingClient();
+        JsonObject started = await StartLoginAsync(client, TestContext.Current.CancellationToken);
+        string id = started["id"]!.GetValue<string>();
+
+        factory.Clock.Advance(TimeSpan.FromMinutes(10));
+        factory.LoginChild.Last.Exit();
+        // Nothing polled the session, so the pump's own finish is what records the expiry here.
+        var runner = (ClaudeCliLoginSessionRunner)factory.Services.GetRequiredService<ILoginSessionRunner>();
+        await runner.FinishedAsync(new LoginSessionId(id)).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        JsonObject after = (await client.GetFromJsonAsync<JsonObject>(SessionPath(id), TestContext.Current.CancellationToken))!;
+
+        after["state"]!.GetValue<string>().ShouldBe(nameof(LoginSessionState.Expired));
+        after["message"]!.GetValue<string>().ShouldContain("left as it was");
+        factory.Cli.LogoutCalls.ShouldBeEmpty();
+        (await File.ReadAllBytesAsync(Path.Combine(folder, CredentialFiles.FileName), TestContext.Current.CancellationToken)).ShouldBe(before);
+    }
+
+    [Fact]
+    public async Task AwaitingTheFinishOfAnUnknownSessionThrows()
+    {
+        await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
+        var runner = (ClaudeCliLoginSessionRunner)factory.Services.GetRequiredService<ILoginSessionRunner>();
+
+        // A finish that completed for an id the runner never had would let a test
+        // assert on a folder nothing had finished writing.
+        await Should.ThrowAsync<ArgumentException>(() => runner.FinishedAsync(LoginSessionId.New()));
+    }
+
+    [Fact]
     public async Task AnUnjudgeableRewriteOfAnExistingPairIsKeptAndNamed()
     {
         await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
@@ -428,6 +462,65 @@ public sealed class LoginEndpointTests
         kept["state"]!.GetValue<string>().ShouldBe(nameof(LoginSessionState.Failed));
         kept["message"]!.GetValue<string>().ShouldContain("could not be checked");
         kept["message"]!.GetValue<string>().ShouldContain("Remove the account from the roster");
+        factory.Cli.LogoutCalls.ShouldBeEmpty();
+        (await File.ReadAllTextAsync(Path.Combine(folder, CredentialFiles.FileName), TestContext.Current.CancellationToken)).ShouldContain("refresh-new");
+    }
+
+    [Fact]
+    public async Task AnUnjudgeableRewriteOfAnExistingPairRewritesNoProfileAndPrunesNothing()
+    {
+        await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
+        string folder = FolderOf(factory, ParkedEmail);
+        await SeedPairAsync(folder, "refresh-old", TestContext.Current.CancellationToken);
+        string profilePath = Path.Combine(folder, "profile.json");
+        await File.WriteAllTextAsync(profilePath, StaleMaxIdentity().ToJsonString(), TestContext.Current.CancellationToken);
+        byte[] profileBefore = await File.ReadAllBytesAsync(profilePath, TestContext.Current.CancellationToken);
+        factory.Cli.ReadError = "claude auth status printed no JSON object";
+        factory.LoginChild.OnCode = async (child, code) =>
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(child.ConfigDirectory, ".claude.json"),
+                new JsonObject { ["numStartups"] = 1, ["oauthAccount"] = AppFactory.AccountJson(child.Email) }.ToJsonString(),
+                CancellationToken.None);
+            await CredentialFiles.WriteAsync(child.ConfigDirectory, "refresh-new", CancellationToken.None);
+            child.Exit();
+        };
+        using HttpClient client = factory.CreateMutatingClient();
+        JsonObject started = await StartLoginAsync(client, TestContext.Current.CancellationToken);
+
+        JsonObject kept = await SubmitCodeAsync(client, started["id"]!.GetValue<string>(), Code, TestContext.Current.CancellationToken);
+
+        // A folder kept because nothing could judge it is kept whole: the profile the
+        // earlier login wrote still stands, and the state file beside it is still there.
+        kept["state"]!.GetValue<string>().ShouldBe(nameof(LoginSessionState.Failed));
+        (await File.ReadAllBytesAsync(profilePath, TestContext.Current.CancellationToken)).ShouldBe(profileBefore);
+        File.Exists(Path.Combine(folder, ".claude.json")).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task AFaultWhileJudgingLeavesThePairInPlaceAndSaysSo()
+    {
+        await using AppFactory factory = await RosteredAsync(TestContext.Current.CancellationToken);
+        string folder = FolderOf(factory, ParkedEmail);
+        await SeedPairAsync(folder, "refresh-old", TestContext.Current.CancellationToken);
+        // The judgement faults rather than answering either way. A fault escaping the
+        // pump would leave a finished login reading "still waiting" until its expiry,
+        // and the fault's own text, which can name a path, may not reach the page.
+        factory.Cli.ReadFault = new InvalidOperationException("the adapter threw");
+        factory.LoginChild.OnCode = async (child, code) =>
+        {
+            await CredentialFiles.WriteAsync(child.ConfigDirectory, "refresh-new", CancellationToken.None);
+            child.Exit();
+        };
+        using HttpClient client = factory.CreateMutatingClient();
+        JsonObject started = await StartLoginAsync(client, TestContext.Current.CancellationToken);
+
+        JsonObject faulted = await SubmitCodeAsync(client, started["id"]!.GetValue<string>(), Code, TestContext.Current.CancellationToken);
+
+        faulted["state"]!.GetValue<string>().ShouldBe(nameof(LoginSessionState.Failed));
+        faulted["message"]!.GetValue<string>().ShouldContain("failed");
+        faulted["message"]!.GetValue<string>().ShouldContain("Remove the account from the roster");
+        faulted["message"]!.GetValue<string>().ShouldNotContain("the adapter threw");
         factory.Cli.LogoutCalls.ShouldBeEmpty();
         (await File.ReadAllTextAsync(Path.Combine(folder, CredentialFiles.FileName), TestContext.Current.CancellationToken)).ShouldContain("refresh-new");
     }

@@ -174,7 +174,9 @@ All notable changes to this project are documented in this file. The format foll
   pair the login is proven to have written: the credential file is read before the CLI starts and
   again when it ends, the same bytes are the earlier login left untouched (the session ends the way
   a login that wrote nothing does), and a pair that was rewritten but whose tier cannot be read is
-  kept, with the message saying to remove the account before switching to it, rather than deleted.
+  kept, with the message saying to remove the account before switching to it, rather than deleted;
+  that kept folder is left exactly as the CLI left it, with no `profile.json` rewritten and no
+  residue pruned, and a fault while judging is settled the same way rather than left pending.
 - Command injection through the `cmd.exe` shim used for an npm-installed CLI. Arguments were joined
   with a space and no quoting, so an account e-mail carrying `&` was read as a command separator and
   the rest of it ran as a second command. Every argument is now one quoted operand at the shared
