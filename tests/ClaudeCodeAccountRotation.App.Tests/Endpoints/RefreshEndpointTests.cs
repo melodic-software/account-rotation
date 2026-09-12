@@ -66,6 +66,11 @@ public sealed class RefreshEndpointTests
         // is the test server's and its Origin is this instance's real address.
         await using AppFactory factory = await LiveAndParkedAsync(TestContext.Current.CancellationToken);
         int port = factory.Services.GetRequiredService<ClaudeCodeAccountRotationConfiguration>().ListenPort;
+        // The pass this starts really reads the parked account, so its answer is
+        // scripted: an unscripted call throws inside the handler and the engine
+        // turns it into a read failure, which would leave this passing for the
+        // wrong reason and spend the harness's own no-network assertion.
+        Script(factory, UsageResponse);
         using HttpClient client = factory.CreateMutatingClient();
         client.DefaultRequestHeaders.Add("Origin", "http://127.0.0.1:" + port.ToString(CultureInfo.InvariantCulture));
 
@@ -73,6 +78,7 @@ public sealed class RefreshEndpointTests
 
         response.StatusCode.ShouldBe(HttpStatusCode.Accepted);
         await factory.Services.GetRequiredService<QuotaState>().CurrentRun;
+        factory.Outbound.Requests.Count.ShouldBe(1);
     }
 
     [Fact]
@@ -285,10 +291,13 @@ public sealed class RefreshEndpointTests
         """;
 
     /// <summary>
-    /// The usage endpoint's answer, copied from the spike-01 capture the Core
-    /// parser is tested against (<c>Fixtures/usage-response-spike01.json</c>).
-    /// Copied rather than linked because this project builds no fixture content,
-    /// and the body is the contract the card is asserted against either way.
+    /// The usage endpoint's answer: the <c>limits</c> and <c>extra_usage</c>
+    /// blocks of the spike-01 capture the Core parser is tested against
+    /// (<c>Core.Tests/Fixtures/usage-response-spike01.json</c>), verbatim. Copied
+    /// rather than linked because this project builds no fixture content, and
+    /// trimmed to the two blocks a card is built from: the capture's other
+    /// top-level keys are the endpoint's own per-bucket duplicates, which this
+    /// build reads nothing from and names nowhere.
     /// </summary>
     private const string UsageResponse = """
         {
