@@ -143,7 +143,7 @@ public sealed class SwitchEndpointTests
         using AppFactory factory = new();
         await CredentialFiles.WriteAsync(factory.LiveDirectory, "refresh-a", TestContext.Current.CancellationToken);
         await factory.WriteStateFileAsync("a@example.com", TestContext.Current.CancellationToken);
-        await factory.ParkedProfileAsync("b@example.com", "refresh-b", TestContext.Current.CancellationToken, loginExpiresAt: DateTimeOffset.UtcNow.AddDays(-1));
+        await factory.ParkedProfileAsync("b@example.com", "refresh-b", TestContext.Current.CancellationToken, loginExpiresAt: factory.Clock.GetUtcNow().AddDays(-1));
         using HttpClient client = factory.CreateMutatingClient();
 
         using HttpResponseMessage response = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);

@@ -129,6 +129,14 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
             // named clients would each hold a script of their own and a test
             // could not say what order the pass sent its requests in.
             services.ConfigureHttpClientDefaults(client => client.ConfigurePrimaryHttpMessageHandler(() => Outbound));
+            // The clock the login runner already reads, now for everything the
+            // container hands a TimeProvider. A refresh pass decides whether an
+            // access token has expired and how long a lockout still has to run
+            // from it, and a test that could not move that clock would have to
+            // sleep through both. Every instant a test compares against one the
+            // host produced must now come from this clock too: a wall-clock
+            // instant means nothing to a host frozen four days earlier.
+            services.Replace(ServiceDescriptor.Singleton<TimeProvider>(Clock));
             services.Replace(ServiceDescriptor.Singleton<IClaudeCliAuthStatus>(Cli));
             // Both ports, or a removal would resolve the real CLI on this machine.
             services.Replace(ServiceDescriptor.Singleton<IClaudeCliLogout>(Cli));
