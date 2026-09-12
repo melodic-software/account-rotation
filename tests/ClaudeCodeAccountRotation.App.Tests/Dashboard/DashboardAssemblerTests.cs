@@ -341,6 +341,34 @@ public sealed class DashboardAssemblerTests
         switched.StatusCode.ShouldBe(System.Net.HttpStatusCode.OK);
     }
 
+    [Fact]
+    public async Task ACachedSnapshotRendersAsCachedWithItsOriginalCaptureTime()
+    {
+        // A figure the cache file put back after a restart is the same figure it
+        // always was, and the card says so: "via cached, as of" the moment it was
+        // read, never the moment it was loaded. A reader who cannot tell the two
+        // apart cannot tell a fresh card from a day-old one.
+        await using AppFactory factory = new();
+        await factory.WriteStateFileAsync(LiveEmail, TestContext.Current.CancellationToken);
+        await factory.ParkedProfileAsync(OtherEmail, "refresh-b", TestContext.Current.CancellationToken);
+        DateTimeOffset captured = factory.Clock.GetUtcNow().AddHours(-4);
+        factory.Services.GetRequiredService<QuotaState>().RecordSnapshot(new UsageSnapshot(
+            AccountEmail.Parse(OtherEmail).Value,
+            captured,
+            QuotaSource.Cached,
+            // A window still open, so the row keeps its percentage: a reset one
+            // blanks through the same rule that keeps a cached figure honest.
+            [new UsageLimit("session", LimitKind.Session, "session", 43, "ok", factory.Clock.GetUtcNow().AddHours(1), null, IsActive: true)],
+            ExtraUsage: null));
+
+        JsonElement card = await CardAsync(factory, OtherEmail);
+
+        Usage(card).GetProperty("source").GetString().ShouldBe("cached");
+        Usage(card).GetProperty("capturedAt").GetDateTimeOffset().ShouldBe(captured);
+        Limit(card, 0).GetProperty("percent").GetDouble().ShouldBe(43);
+        Limit(card, 0).GetProperty("windowReset").GetBoolean().ShouldBeFalse();
+    }
+
     /// <summary>The rows a card shows before anything has numbers for it: named, ordered, and every one of them unknown.</summary>
     private static void ShouldBeAllUnknown(JsonElement card)
     {

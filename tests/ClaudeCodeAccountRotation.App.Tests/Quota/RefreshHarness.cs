@@ -60,6 +60,7 @@ internal sealed class RefreshHarness : IDisposable
             Clock,
             NullLogger<LiveDirectorySwitch>.Instance);
         Budget = new RefreshBudget(Clock);
+        Cache = new UsageSnapshotCache(options);
         Engine = new QuotaRefresh(
             Store,
             Profiles,
@@ -70,7 +71,7 @@ internal sealed class RefreshHarness : IDisposable
             () => Tokens,
             Budget,
             State,
-            new UsageSnapshotCache(),
+            Cache,
             Gate,
             Logins,
             Recovery,
@@ -112,6 +113,9 @@ internal sealed class RefreshHarness : IDisposable
     public LiveDirectorySwitch Executor { get; }
 
     public RefreshBudget Budget { get; }
+
+    /// <summary>The real cache file under this harness's app data, so a pass's saves are the ones a test reads back.</summary>
+    public UsageSnapshotCache Cache { get; }
 
     public QuotaRefresh Engine { get; }
 
@@ -181,6 +185,7 @@ internal sealed class RefreshHarness : IDisposable
     {
         _roster.Dispose();
         Gate.Dispose();
+        Cache.Dispose();
         if (Directory.Exists(Root))
         {
             Directory.Delete(Root, recursive: true);

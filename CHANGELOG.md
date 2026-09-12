@@ -69,7 +69,13 @@ All notable changes to this project are documented in this file. The format foll
   is moved to `recovery/stale/` and named in a warning instead of overwriting the newer pair.
   `tests/acceptance/check-single-holder.sh` counts and names what those two directories hold, on a
   `recovery=` line of its own, because a recovery file is a second on-disk holder of a lineage for
-  as long as it stands.
+  as long as it stands. The figures survive a restart: every successful read is kept in
+  `state/usage-cache.json` under the app data directory and loaded back at start, so installing a
+  build costs no reads and each card renders `via cached` with the time it was originally captured
+  rather than falling back to `unknown`. A cached row whose window has reset since then still blanks
+  through the same rule, which is what keeps `via cached` from meaning "a number from nowhere". The
+  file holds percentages, reset times, bucket names, and account addresses, and no token of any
+  kind; a missing or unreadable one loads nothing rather than delaying the start.
 - A repo-level `nuget.config` that clears every inherited package source and names nuget.org as the
   only one, for restore, audit, and package-source mapping alike. `dotnet restore --locked-mode`
   then resolves the same way on a developer machine whose user-level NuGet configuration enables
