@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Adapters.Process;
 using ClaudeCodeAccountRotation.App.Switching;
+using ClaudeCodeAccountRotation.App.Tests.Adapters;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Accounts;
 using ClaudeCodeAccountRotation.Core.Ports;
@@ -78,6 +79,17 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
     /// <summary>Every log line the host wrote, so a test can assert what never reaches one.</summary>
     public LogSink Logs { get; } = new();
 
+    /// <summary>
+    /// The socket at the bottom of every outbound handler chain. Empty by
+    /// default, so an unexpected outbound call throws rather than reaching the
+    /// network or quietly answering: this is the assertion that no test in this
+    /// repository talks to Anthropic. A test scripts it with
+    /// <see cref="Adapters.RecordingHandler.Enqueue"/> after the host is built,
+    /// and both named clients share the one queue, so a pass's token POST and its
+    /// usage GET are recorded in the order they were actually sent.
+    /// </summary>
+    public RecordingHandler Outbound { get; } = new();
+
     public static JsonObject AccountJson(string email) => new() { ["accountUuid"] = "uuid-" + email, ["emailAddress"] = email };
 
     public async Task WriteStateFileAsync(string email, CancellationToken cancellationToken)
@@ -111,6 +123,12 @@ internal sealed class AppFactory : WebApplicationFactory<Program>
         builder.ConfigureLogging(logging => logging.AddProvider(Logs));
         builder.ConfigureTestServices(services =>
         {
+            // Nothing reaches the network: the factory's own handler chain stays
+            // and only the socket underneath it is replaced. The lambda captures
+            // the one instance rather than minting one per client, or the two
+            // named clients would each hold a script of their own and a test
+            // could not say what order the pass sent its requests in.
+            services.ConfigureHttpClientDefaults(client => client.ConfigurePrimaryHttpMessageHandler(() => Outbound));
             services.Replace(ServiceDescriptor.Singleton<IClaudeCliAuthStatus>(Cli));
             // Both ports, or a removal would resolve the real CLI on this machine.
             services.Replace(ServiceDescriptor.Singleton<IClaudeCliLogout>(Cli));
