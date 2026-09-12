@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
+using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Identity;
@@ -58,15 +59,18 @@ public sealed class LiveDirectorySwitchTests : IDisposable
         ILoginSessionRunner? logins = null)
     {
         SwitchOptions options = new(_liveDirectory, _stateFilePath, _profilesRoot, _appData, lockWait ?? TimeSpan.FromSeconds(2), gateTimeout ?? TimeSpan.FromMilliseconds(200));
+        ICredentialPairStore store = pairs ?? new FileSystemCredentialPairStore(_liveDirectory, _profilesRoot, TimeProvider.System);
+        ProfileFolderStore folders = new(_profilesRoot);
         return new LiveDirectorySwitch(
-            pairs ?? new FileSystemCredentialPairStore(_liveDirectory, _profilesRoot, TimeProvider.System),
+            store,
             new ClaudeStateFile(_stateFilePath),
-            new ProfileFolderStore(_profilesRoot),
+            folders,
             new SwitchJournal(_appData),
             _gate,
             logins ?? new NoLoginRunning(),
             _cli,
             new ManagedLoginPolicyReader(Path.Combine(_root, "managed-settings.json"), static () => null, static () => null),
+            new RecoveryFiles(options, store, folders, new QuotaState(), NullLogger<RecoveryFiles>.Instance),
             options,
             TimeProvider.System,
             NullLogger<LiveDirectorySwitch>.Instance);
@@ -654,6 +658,30 @@ public sealed class LiveDirectorySwitchTests : IDisposable
         (await journal.ReadOpenAsync(TestContext.Current.CancellationToken)).ShouldBeNull();
         JsonObject record = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(_appData, "state", "live-owner.json"), TestContext.Current.CancellationToken))!.AsObject();
         record["fingerprint"]!.GetValue<string>().ShouldBe(CredentialFiles.Pair("refresh-b-rotated").Fingerprint.Sha256Hex);
+    }
+
+    [Fact]
+    public async Task ASwitchToAFolderStrandedInRecoveryIsRefused()
+    {
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        await ParkedProfileAsync("b@example.com", "refresh-b");
+        // A refresh rotated b's pair and could not write it back, so the file still
+        // in b's folder holds the refresh token the token endpoint already killed.
+        Directory.CreateDirectory(Path.Combine(_appData, "recovery"));
+        await File.WriteAllTextAsync(
+            Path.Combine(_appData, "recovery", "b@example.com.credentials.json"),
+            "{}",
+            TestContext.Current.CancellationToken);
+
+        Result<SwitchOutcome, SwitchRefusal> result = await Switch().SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken);
+
+        result.Error.ShouldBe(SwitchRefusal.TargetStrandedInRecovery);
+        // Nothing moved: the restore still has the parked pair to compare against.
+        (await CredentialFiles.FingerprintAsync(_liveDirectory, TestContext.Current.CancellationToken))
+            .ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
+        (await CredentialFiles.FingerprintAsync(Path.Combine(_profilesRoot, "b@example.com"), TestContext.Current.CancellationToken))
+            .ShouldBe(CredentialFiles.Pair("refresh-b").Fingerprint);
     }
 
     public void Dispose()
