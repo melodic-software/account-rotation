@@ -404,9 +404,15 @@
   }
 
   // A figure whose age and origin go unsaid is exactly what this card exists to
-  // avoid, so the two travel together wherever a source is named.
-  function asOf(capturedAt, source) {
-    return "as of " + new Date(capturedAt).toLocaleTimeString() + " via " + source;
+  // avoid, so the two travel together wherever a source is named. A time of day
+  // alone reads as today: a figure cached before midnight, or a card nobody has
+  // refreshed since last week, would look hours old instead of days, which is
+  // the exact deceit this line exists to prevent. Same day, the time; any other
+  // day, the date with it.
+  function asOf(capturedAt, source, from) {
+    var taken = new Date(capturedAt);
+    var sameDay = taken.toDateString() === new Date(from).toDateString();
+    return "as of " + (sameDay ? taken.toLocaleTimeString() : taken.toLocaleString()) + " via " + source;
   }
 
   // Unknown first: no source carried this bucket at all. Then a window that has
@@ -432,10 +438,13 @@
     bar.appendChild(fill);
     row.appendChild(bar);
     row.appendChild(element("span", "reading", reading(limit)));
-    if (limit.resetsAt) { row.appendChild(element("span", "resets", "resets " + relative(limit.resetsAt, at))); }
+    // A window that has already reset has no reset to count down to: "resets in
+    // 0 s" beside "window reset since last read" is the same stale figure said
+    // twice.
+    if (limit.resetsAt && !limit.windowReset) { row.appendChild(element("span", "resets", "resets " + relative(limit.resetsAt, at))); }
     // Only a row taken from another source than the card's own says where it
     // came from; otherwise the card's single "as of" line speaks for it.
-    if (limit.source) { row.appendChild(element("span", "asof", asOf(limit.capturedAt, limit.source))); }
+    if (limit.source) { row.appendChild(element("span", "asof", asOf(limit.capturedAt, limit.source, at))); }
     return row;
   }
 
@@ -463,7 +472,7 @@
     var at = new Date(dashboard.capturedAt).getTime();
     account.usage.limits.forEach(function (limit) { section.appendChild(limitRow(limit, at)); });
     if (account.usage.source) {
-      section.appendChild(element("p", "asof", asOf(account.usage.capturedAt, account.usage.source)));
+      section.appendChild(element("p", "asof", asOf(account.usage.capturedAt, account.usage.source, at)));
     }
     if (account.usage.credits) { section.appendChild(element("p", "asof", creditsLine(account.usage.credits))); }
     if (account.usageNote) { section.appendChild(element("p", "muted", account.usageNote)); }
@@ -492,13 +501,17 @@
   }
 
   function render(dashboard, force) {
+    // The header is not part of any card, so it is written before the guard
+    // below and on every poll: an operator with an Edit panel open would
+    // otherwise watch the page's own timestamp, the pass's progress, and the
+    // Refresh all button freeze at whatever they said when the panel opened.
+    captured.textContent = "as of " + new Date(dashboard.capturedAt).toLocaleTimeString();
+    refreshStateLine.textContent = passState(dashboard);
+    refreshAllButton.disabled = busy || dashboard.refresh.inProgress;
     // Rendering rebuilds every card, so the ten-second poll would otherwise wipe an
     // Edit panel, or a half-typed login code, out from under whoever is typing it.
     // A mutation's own render passes force, since that one has to show the result.
     if (!force && cards.querySelector("details.edit[open], details.login[open]")) { return; }
-    captured.textContent = "as of " + new Date(dashboard.capturedAt).toLocaleTimeString();
-    refreshStateLine.textContent = passState(dashboard);
-    refreshAllButton.disabled = busy || dashboard.refresh.inProgress;
     banner.hidden = !dashboard.banner;
     banner.textContent = dashboard.banner || "";
     warnings.innerHTML = "";

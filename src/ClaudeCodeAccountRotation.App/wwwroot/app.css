@@ -89,7 +89,9 @@ header h1 { margin: 0; font-size: 1.6rem; letter-spacing: 0.01em; }
 /* One bucket per row: label, bar, and reading on one line at the card's 280px,
    with the reset time and a row's own source wrapping under them. */
 .limit { display: flex; flex-wrap: wrap; align-items: center; gap: 0.2rem 0.5rem; font-size: 0.85rem; }
-.limit .label { flex: 0 0 3.4rem; color: var(--muted); }
+/* A scoped window's label is whatever the endpoint calls it, so it wraps inside
+   its own basis rather than pushing the bar off the row. */
+.limit .label { flex: 0 0 3.4rem; min-width: 0; overflow-wrap: anywhere; color: var(--muted); }
 .limit .bar {
   flex: 1 1 5rem;
   height: 0.5rem;

@@ -52,11 +52,16 @@ fingerprint() {
 # duplicate cannot hide behind a temp name. The name pattern defaults to every
 # temp in a Claude-owned directory; the home root also holds unrelated tools'
 # temps, so there the pattern is narrowed to ones naming the state file.
+# Collects into "files" unless a third argument names another array, which the
+# recovery sweep below uses: a recovery temp holds the same rotated pair as the
+# settled file beside it once the write lands, so counting it as a second holder
+# would report a duplicate for a directory whose whole purpose is to hold one.
 collect_temps() {
   local dir="$1" pattern="${2:-.*.tmp}" entry
+  local -n target="${3:-files}"
   [[ -d "$dir" ]] || return 0
   while IFS= read -r -d '' entry; do
-    files+=("$entry")
+    target+=("$entry")
   done < <(find "$dir" -maxdepth 1 -name "$pattern" -type f -print0 | sort -z)
 }
 
@@ -124,8 +129,14 @@ for directory in "$app_data/recovery" "$app_data/recovery/stale"; do
   [[ -d "$directory" ]] || continue
   while IFS= read -r -d '' entry; do
     recovery_files+=("$entry")
-    echo "recovery file $(basename "$entry") in $(basename "$directory")" >&2
   done < <(find "$directory" -maxdepth 1 -name "*$credential_file" -type f -print0 | sort -z)
+  # A crash between an envelope's write and its rename leaves a temp holding a
+  # whole rotated pair, exactly as a settled envelope does, so the count the
+  # runbook expects to be zero has to include it.
+  collect_temps "$directory" '.*.tmp' recovery_files
+done
+for entry in "${recovery_files[@]}"; do
+  echo "recovery file $(basename "$entry") in $(basename "$(dirname "$entry")")" >&2
 done
 echo "recovery=${#recovery_files[@]}"
 
