@@ -8,16 +8,34 @@
 # to parse is counted as unreadable rather than silently skipped. Reads the
 # files, prints only SHA-256 fingerprints, never a token.
 #
-# Usage: check-single-holder.sh <profiles-root> <live-dir>
+# A second `recovery=N` line counts the rotated pairs held under the app data
+# directory's `recovery/` and `recovery/stale/`, each of which is a second
+# on-disk holder of a lineage for as long as it stands. A strand is a state to
+# clear rather than a duplicate to fail on, so those files are named and counted
+# and the exit code is left to the duplicate scan.
+#
+# Usage: check-single-holder.sh <profiles-root> <live-dir> [app-data-dir]
 set -euo pipefail
 
-if [[ $# -ne 2 ]]; then
-  echo "usage: $0 <profiles-root> <live-dir>" >&2
+if [[ $# -lt 2 || $# -gt 3 ]]; then
+  echo "usage: $0 <profiles-root> <live-dir> [app-data-dir]" >&2
   exit 2
 fi
 
+product="claude-code-account-rotation"
 profiles_root="$1"
 live_dir="$2"
+# The same per-user location the app composes: the platform's local application
+# data directory (which the .NET runtime resolves to %LOCALAPPDATA% on Windows
+# and to $XDG_DATA_HOME or ~/.local/share elsewhere) plus the product name. The
+# Windows value arrives with backslashes under Git Bash.
+if [[ -n "${3:-}" ]]; then
+  app_data="$3"
+elif [[ -n "${LOCALAPPDATA:-}" ]]; then
+  app_data="${LOCALAPPDATA//\\//}/$product"
+else
+  app_data="${XDG_DATA_HOME:-${HOME:-}/.local/share}/$product"
+fi
 credential_file=".credentials.json"
 
 fingerprint() {
@@ -93,4 +111,19 @@ for file in "${files[@]}"; do
 done
 
 echo "files=${#files[@]} distinct=${#holders[@]} duplicates=$duplicates unreadable=$unreadable"
+
+# The recovery envelope nests the pair one level down, so these files are not
+# fingerprinted beside the settled ones; each is named by its file so the
+# operator can see which account is stranded, and the count is the number the
+# runbook expects to be zero.
+declare -a recovery_files=()
+for directory in "$app_data/recovery" "$app_data/recovery/stale"; do
+  [[ -d "$directory" ]] || continue
+  while IFS= read -r -d '' entry; do
+    recovery_files+=("$entry")
+    echo "recovery file $(basename "$entry") in $(basename "$directory")" >&2
+  done < <(find "$directory" -maxdepth 1 -name "*$credential_file" -type f -print0 | sort -z)
+done
+echo "recovery=${#recovery_files[@]}"
+
 [[ "$duplicates" -eq 0 && "$unreadable" -eq 0 ]]

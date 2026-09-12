@@ -8,6 +8,15 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
+- The dashboard payload carries usage where it carried quota (#52). Each card's `quota` and
+  `quotaNote` are replaced by `usage` (the source the newest figures came from, when they were
+  taken, one row per bucket, and the usage-credits block) and `usageNote`, and each card gains a
+  `refresh` object holding how its last turn in a pass went; the dashboard itself gains a `refresh`
+  object with whether a pass is running, the lockout that is still standing, and one line on what
+  the last pass came to. A card is merged per bucket across every source that has numbers for that
+  account rather than letting the newest whole reading win, so a live session's statusline write can
+  no longer blank a scoped row an on-demand read found. Nothing outside this repository reads the
+  payload.
 - Discovered browser profiles are listed in the order an operator reads them: `Default` first, then
   `Profile N` by the number, then any other directory name, within each browser. The browser's own
   `Local State` lists them in whatever order it wrote them, which is a deletion history (the directory
@@ -32,6 +41,35 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- Every card says what its account has left (#52). The five-hour window, the seven-day window, and
+  every scoped window the endpoint reports each get a row with its percentage, its reset time, and a
+  line naming the source the figures came from and the time they were captured. A bucket no source
+  has ever carried says `unknown` rather than showing a zero it does not know, and a bucket whose
+  window has reset since it was captured says so instead of showing a figure that now measures
+  nothing: a card that silently shows a stale number is worse than one that admits it is stale.
+  `Refresh all` in the header reads every account that has credentials and is not paused, one read
+  each, the one read longest ago first; a card's own `Refresh` reads that one account. Both are
+  routes in the same-origin mutation group, `POST /api/refresh` and
+  `POST /api/accounts/{email}/refresh`, and both answer at once and leave the pass to a hosted
+  background worker, because a browser navigating away must never interrupt a credential operation;
+  the page's ten-second poll is what shows each card land. Reads are paced and budgeted, and a 429
+  from either host ends the pass and refuses every later read until its `Retry-After` has expired,
+  which each waiting card reports as `rate limited, retry in N s` while keeping its place at the
+  head of the next pass. A parked account's access token has almost always expired by the time it is
+  read, so refreshing it is the normal path of a pass rather than the exception: one token request,
+  and the rotated pair written back under the credential mutation gate by compare-and-swap against
+  the fingerprint the folder still holds, with every sibling key left as it was. The live account is
+  never refreshed by this tool, because the running session owns that lineage and renews it itself.
+  A write-back that cannot land after its retries parks the rotated pair in an owner-only file under
+  the app data directory's `recovery/`, since the old refresh token dies the moment the token
+  endpoint answers and that file is then the only copy of a working login: the card reads
+  `credentials stranded in recovery`, a switch to that folder is refused by the server rather than
+  only greyed out on the page, and the next start and the next per-card refresh both try the restore
+  through the same compare-and-swap. A recovery file whose folder was legitimately rewritten since
+  is moved to `recovery/stale/` and named in a warning instead of overwriting the newer pair.
+  `tests/acceptance/check-single-holder.sh` counts and names what those two directories hold, on a
+  `recovery=` line of its own, because a recovery file is a second on-disk holder of a lineage for
+  as long as it stands.
 - A repo-level `nuget.config` that clears every inherited package source and names nuget.org as the
   only one, for restore, audit, and package-source mapping alike. `dotnet restore --locked-mode`
   then resolves the same way on a developer machine whose user-level NuGet configuration enables
