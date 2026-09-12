@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
+using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core;
 using ClaudeCodeAccountRotation.Core.Identity;
@@ -58,15 +59,18 @@ public sealed class LiveDirectorySwitchTests : IDisposable
         ILoginSessionRunner? logins = null)
     {
         SwitchOptions options = new(_liveDirectory, _stateFilePath, _profilesRoot, _appData, lockWait ?? TimeSpan.FromSeconds(2), gateTimeout ?? TimeSpan.FromMilliseconds(200));
+        ICredentialPairStore store = pairs ?? new FileSystemCredentialPairStore(_liveDirectory, _profilesRoot, TimeProvider.System);
+        ProfileFolderStore folders = new(_profilesRoot);
         return new LiveDirectorySwitch(
-            pairs ?? new FileSystemCredentialPairStore(_liveDirectory, _profilesRoot, TimeProvider.System),
+            store,
             new ClaudeStateFile(_stateFilePath),
-            new ProfileFolderStore(_profilesRoot),
+            folders,
             new SwitchJournal(_appData),
             _gate,
             logins ?? new NoLoginRunning(),
             _cli,
             new ManagedLoginPolicyReader(Path.Combine(_root, "managed-settings.json"), static () => null, static () => null),
+            new RecoveryFiles(options, store, folders, new QuotaState(), NullLogger<RecoveryFiles>.Instance),
             options,
             TimeProvider.System,
             NullLogger<LiveDirectorySwitch>.Instance);

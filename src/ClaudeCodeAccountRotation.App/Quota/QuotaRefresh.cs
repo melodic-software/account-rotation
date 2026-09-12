@@ -1,0 +1,658 @@
+using System.Security.Cryptography;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
+using ClaudeCodeAccountRotation.App.Switching;
+using ClaudeCodeAccountRotation.Core;
+using ClaudeCodeAccountRotation.Core.Accounts;
+using ClaudeCodeAccountRotation.Core.Identity;
+using ClaudeCodeAccountRotation.Core.Ports;
+using ClaudeCodeAccountRotation.Core.Quota;
+using Microsoft.Extensions.Logging;
+
+namespace ClaudeCodeAccountRotation.App.Quota;
+
+/// <summary>
+/// One refresh pass: every account that has credentials and is not paused, in
+/// the order that reaches the least recently read first, one usage read each.
+/// <para>
+/// A parked account's access token is expired on nearly every read, because
+/// nothing has used that account since it was parked, so the token refresh and
+/// its compare-and-swap write-back are the normal path through here rather than
+/// an exception. The token endpoint kills the old refresh token the moment it
+/// answers 200, which is what sets the shape of everything below: the POST and
+/// the write-back are one unit under the mutation gate and under
+/// <see cref="CancellationToken.None"/>, bounded by the adapter's own timeout
+/// and the write retry budget and never by a request's token or the host's
+/// shutdown; a pair that changed underneath the gate is refused before any POST;
+/// and a write-back that cannot land parks the rotated pair in the recovery
+/// directory rather than dropping it.
+/// </para>
+/// <para>
+/// Nothing here waits on a timer. The one-second spacing between reads goes
+/// through an injected delay so a test can assert it without sleeping, and the
+/// budget refuses rather than waiting.
+/// </para>
+/// </summary>
+internal sealed partial class QuotaRefresh
+{
+    /// <summary>
+    /// How long the refresh unit waits for the mutation gate. Not zero, which is
+    /// what production hands every other caller: the dashboard poll's identity
+    /// repair takes the gate with a zero wait every ten seconds, so a zero wait
+    /// here would skip accounts at random depending on which poll it collided
+    /// with. Two seconds outlasts a repair and still refuses a real switch
+    /// quickly.
+    /// </summary>
+    private static readonly TimeSpan _gateWait = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// What a 429 costs when the host declines to say. Spike 02 measured the
+    /// real lockout at 300 seconds, and an absent or zero <c>Retry-After</c>
+    /// must not be read as "come straight back".
+    /// </summary>
+    private static readonly TimeSpan _lockoutFloor = TimeSpan.FromSeconds(300);
+
+    /// <summary>One second between reads, so a pass does not arrive at the endpoint as a burst.</summary>
+    private static readonly TimeSpan _spacing = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// Three write-back attempts and the wait after each. The last wait is
+    /// deliberate: the recovery write that follows it touches the same directory
+    /// tree, so a file system that has just refused three writes is given the
+    /// same settling second before the rotated pair's last chance at disk.
+    /// </summary>
+    private static readonly TimeSpan[] _writeBackBackoff =
+        [TimeSpan.FromMilliseconds(250), TimeSpan.FromMilliseconds(500), TimeSpan.FromSeconds(1)];
+
+    private readonly ICredentialPairStore _pairs;
+    private readonly ProfileFolderStore _profiles;
+    private readonly RosterFile _rosterFile;
+    private readonly ClaudeStateFile _stateFile;
+    private readonly LiveDirectorySwitch _executor;
+    private readonly Func<IUsageEndpointClient> _usage;
+    private readonly Func<ITokenRefreshClient> _tokens;
+    private readonly RefreshBudget _budget;
+    private readonly QuotaState _state;
+    private readonly UsageSnapshotCache _cache;
+    private readonly CredentialMutationGate _gate;
+    private readonly ILoginSessionRunner _logins;
+    private readonly RecoveryFiles _recovery;
+    private readonly TimeProvider _timeProvider;
+    private readonly Func<TimeSpan, CancellationToken, Task> _pace;
+    private readonly ILogger<QuotaRefresh> _logger;
+
+    public QuotaRefresh(
+        ICredentialPairStore pairs,
+        ProfileFolderStore profiles,
+        RosterFile rosterFile,
+        ClaudeStateFile stateFile,
+        LiveDirectorySwitch executor,
+        Func<IUsageEndpointClient> usage,
+        Func<ITokenRefreshClient> tokens,
+        RefreshBudget budget,
+        QuotaState state,
+        UsageSnapshotCache cache,
+        CredentialMutationGate gate,
+        ILoginSessionRunner logins,
+        RecoveryFiles recovery,
+        TimeProvider timeProvider,
+        Func<TimeSpan, CancellationToken, Task> pace,
+        ILogger<QuotaRefresh> logger)
+    {
+        _pairs = pairs;
+        _profiles = profiles;
+        _rosterFile = rosterFile;
+        _stateFile = stateFile;
+        _executor = executor;
+        _usage = usage;
+        _tokens = tokens;
+        _budget = budget;
+        _state = state;
+        _cache = cache;
+        _gate = gate;
+        _logins = logins;
+        _recovery = recovery;
+        _timeProvider = timeProvider;
+        _pace = pace;
+        _logger = logger;
+    }
+
+    /// <summary>
+    /// Runs one pass to completion and records what each account came to. Never
+    /// throws: the worker that drives it must survive any single account's bad
+    /// day, so a failure inside one turn becomes that account's outcome.
+    /// <paramref name="stopping"/> is consulted only between accounts and by the
+    /// usage read, never by the gated refresh unit.
+    /// </summary>
+    public async Task RunAsync(RefreshRequest request, CancellationToken stopping)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        Dictionary<RefreshOutcomeKind, int> summary = [];
+        try
+        {
+            IReadOnlyList<Candidate> candidates = await CandidatesAsync(request, summary, stopping);
+            bool ended = false;
+            bool sentRead = false;
+            foreach (Candidate candidate in candidates)
+            {
+                if (stopping.IsCancellationRequested)
+                {
+                    break;
+                }
+
+                Turn turn = ended ? new Turn(LockedOut()) : await TurnAsync(candidate, sentRead, stopping);
+                Record(candidate.Email, turn.Outcome, summary);
+                ended |= turn.EndsPass;
+                sentRead |= turn.SentRead;
+            }
+        }
+#pragma warning disable CA1031 // Do not catch general exception types
+        catch (Exception exception)
+#pragma warning restore CA1031
+        {
+            // Building the candidate set reads four files written by other
+            // processes. Anything unforeseen there ends the pass with what it has
+            // rather than taking the hosted worker down.
+            LogPassFailed(exception.ToString());
+        }
+        finally
+        {
+            _state.RecordPassSummary(summary);
+        }
+    }
+
+    /// <summary>
+    /// Who this pass reads, in order, and the outcome of everyone it decided not
+    /// to read before it started. The live account is whatever the state file
+    /// says after a stale-identity repair; a repair that could not run leaves the
+    /// live identity unverified, and reading a pair whose owner is in doubt would
+    /// put another account's numbers on the card.
+    /// </summary>
+    private async Task<IReadOnlyList<Candidate>> CandidatesAsync(
+        RefreshRequest request,
+        Dictionary<RefreshOutcomeKind, int> summary,
+        CancellationToken stopping)
+    {
+        IdentityRepair repair = await _executor.RepairStaleIdentityAsync(stopping);
+        AccountEmail? liveEmail = (await _stateFile.ReadAccountBlockAsync(stopping))?.Email;
+        IReadOnlyList<ParkedProfile> parked = await _profiles.ListAsync(stopping);
+        Roster roster = await _rosterFile.ReadAsync(stopping);
+        bool Wanted(AccountEmail email) => request.Account is null || request.Account == email;
+
+        List<Candidate> candidates = [];
+        if (liveEmail is AccountEmail live && Wanted(live))
+        {
+            if (repair is IdentityRepair.Busy or IdentityRepair.NoProfileBlock)
+            {
+                Record(live, Outcome(RefreshOutcomeKind.Skipped, RefreshMessages.LiveIdentityUnverified), summary);
+            }
+            else
+            {
+                candidates.Add(new Candidate(live, parked.FirstOrDefault(profile => profile.Email == live)?.FolderPath, IsLive: true));
+            }
+        }
+
+        foreach (ParkedProfile profile in parked)
+        {
+            if (profile.Email == liveEmail || !Wanted(profile.Email))
+            {
+                continue;
+            }
+
+            if (roster.Find(profile.Email) is { Paused: true })
+            {
+                Record(profile.Email, Outcome(RefreshOutcomeKind.Skipped, RefreshMessages.Paused), summary);
+            }
+            else if (!profile.HasCredentials)
+            {
+                Record(profile.Email, Outcome(RefreshOutcomeKind.NeedsLogin, RefreshMessages.NeedsLogin), summary);
+            }
+            else
+            {
+                candidates.Add(new Candidate(profile.Email, profile.FolderPath, IsLive: false));
+            }
+        }
+
+        // A roster entry that has never been logged in owns no folder, so the
+        // listing above cannot see it; its card says so rather than staying blank.
+        foreach (RosterEntry entry in roster.Entries)
+        {
+            if (Wanted(entry.Email)
+                && entry.Email != liveEmail
+                && !parked.Any(profile => profile.Email == entry.Email))
+            {
+                Record(entry.Email, Outcome(RefreshOutcomeKind.NeedsLogin, RefreshMessages.NeedsLogin), summary);
+            }
+        }
+
+        IReadOnlyList<RefreshCandidate> order = RefreshOrder.Order(
+            [.. candidates.Select(candidate => new RefreshCandidate(candidate.Email, LastReadAt(candidate.Email)))]);
+        return [.. order.Select(ordered => candidates.First(candidate => candidate.Email == ordered.Email))];
+    }
+
+    /// <summary>
+    /// One account's turn. The order of the guards is the whole of the safety
+    /// argument: nothing is sent while a lockout stands, a stranded folder is
+    /// restored before its pair is read at all, the live pair is never refreshed,
+    /// a parked pair known to be expired skips the doomed read, and the budget's
+    /// reservation is taken only when a request is about to leave.
+    /// </summary>
+    private async Task<Turn> TurnAsync(Candidate candidate, bool sentRead, CancellationToken stopping)
+    {
+        try
+        {
+            DateTimeOffset now = _timeProvider.GetUtcNow();
+            if (LockedUntil(now) is not null)
+            {
+                return new Turn(LockedOut());
+            }
+
+            if (!candidate.IsLive
+                && candidate.FolderPath is string stranded
+                && !await _recovery.RestoreAsync(stranded, stopping))
+            {
+                return new Turn(Outcome(RefreshOutcomeKind.Stranded, RefreshMessages.Stranded));
+            }
+
+            CredentialPair? pair = candidate.IsLive
+                ? await _pairs.ReadLiveAsync(stopping)
+                : await _pairs.ReadParkedAsync(candidate.FolderPath!, stopping);
+            if (pair is null)
+            {
+                return new Turn(Outcome(RefreshOutcomeKind.NeedsLogin, RefreshMessages.NeedsLogin));
+            }
+
+            if (pair.AccessTokenExpiresAt <= now)
+            {
+                if (candidate.IsLive)
+                {
+                    return new Turn(Outcome(RefreshOutcomeKind.SessionWillRefresh, RefreshMessages.SessionWillRefresh));
+                }
+
+                GatedRefresh refreshed = await RefreshUnderGateAsync(candidate.FolderPath!, pair);
+                if (refreshed.Outcome is RefreshOutcome refused)
+                {
+                    return new Turn(refused, refreshed.EndsPass);
+                }
+
+                pair = refreshed.Pair!;
+            }
+
+            return await ReadAsync(candidate, pair, sentRead, retried: false, stopping);
+        }
+#pragma warning disable CA1031 // Do not catch general exception types
+        catch (Exception exception) when (exception is not OperationCanceledException)
+#pragma warning restore CA1031
+        {
+            // One account's unforeseen failure costs that account its turn and
+            // nothing more; the next nine still get read.
+            LogTurnFailed(candidate.Email.Value, exception.ToString());
+            return new Turn(Outcome(RefreshOutcomeKind.ReadFailed, RefreshMessages.ReadFailedTransport));
+        }
+    }
+
+    /// <summary>
+    /// The usage read, and the one retry a 401 on a parked pair earns. The
+    /// retry goes back through <see cref="RefreshBudget.TryReserve"/> rather than
+    /// riding the first reservation, because the budget refunded that one itself
+    /// and its rule for a token the endpoint keeps rejecting is the one that
+    /// should decide, not this method.
+    /// </summary>
+    private async Task<Turn> ReadAsync(Candidate candidate, CredentialPair pair, bool sentRead, bool retried, CancellationToken stopping)
+    {
+        if (!_budget.TryReserve(candidate.Email))
+        {
+            return new Turn(BudgetRefused(candidate.Email));
+        }
+
+        if (sentRead)
+        {
+            await _pace(_spacing, stopping);
+        }
+
+        Result<JsonDocument, UsageReadFailure> read = await _usage().ReadUsageAsync(pair.AccessToken, stopping);
+        if (read.IsFailure)
+        {
+            return await FailedReadAsync(candidate, read.Error, retried, stopping);
+        }
+
+        using JsonDocument body = read.Value;
+        Result<IReadOnlyList<UsageLimit>, string> limits = UsageResponseParser.ParseLimits(body.RootElement);
+        if (limits.IsFailure)
+        {
+            LogReadUnparsable(candidate.Email.Value, limits.Error);
+            return new Turn(Outcome(RefreshOutcomeKind.ReadFailed, RefreshMessages.ReadFailedMalformed), SentRead: true);
+        }
+
+        UsageSnapshot snapshot = new(
+            candidate.Email,
+            _timeProvider.GetUtcNow(),
+            QuotaSource.OnDemandRefresh,
+            limits.Value,
+            UsageResponseParser.ParseExtraUsage(body.RootElement));
+        _state.RecordSnapshot(snapshot);
+        await _cache.SaveAsync(candidate.Email, snapshot, stopping);
+        return new Turn(Outcome(RefreshOutcomeKind.Read, RefreshMessages.Read), SentRead: true);
+    }
+
+    private async Task<Turn> FailedReadAsync(Candidate candidate, UsageReadFailure failure, bool retried, CancellationToken stopping)
+    {
+        switch (failure.Kind)
+        {
+            case UsageReadFailureKind.Unauthorized when candidate.IsLive:
+                // The running session owns the live lineage and renews it itself;
+                // this tool refreshing it would rotate the token underneath the CLI.
+                return new Turn(Outcome(RefreshOutcomeKind.SessionWillRefresh, RefreshMessages.SessionWillRefresh), SentRead: true);
+
+            case UsageReadFailureKind.Unauthorized when !retried:
+                {
+                    _budget.RecordUnauthorized(candidate.Email);
+                    CredentialPair? current = await _pairs.ReadParkedAsync(candidate.FolderPath!, stopping);
+                    if (current is null)
+                    {
+                        return new Turn(Outcome(RefreshOutcomeKind.NeedsLogin, RefreshMessages.NeedsLogin), SentRead: true);
+                    }
+
+                    GatedRefresh refreshed = await RefreshUnderGateAsync(candidate.FolderPath!, current);
+                    return refreshed.Outcome is RefreshOutcome refused
+                        ? new Turn(refused, refreshed.EndsPass, SentRead: true)
+                        : await ReadAsync(candidate, refreshed.Pair!, sentRead: false, retried: true, stopping);
+                }
+
+            case UsageReadFailureKind.Unauthorized:
+                // A freshly rotated access token the endpoint still rejects is not
+                // something another refresh can fix.
+                return new Turn(Outcome(RefreshOutcomeKind.ReadFailed, RefreshMessages.ReadFailedUnauthorized), SentRead: true);
+
+            case UsageReadFailureKind.RateLimited:
+                {
+                    TimeSpan retryAfter = Lockout(failure.RetryAfter);
+                    DateTimeOffset until = _timeProvider.GetUtcNow() + retryAfter;
+                    _budget.RecordLockout(candidate.Email, retryAfter);
+                    _state.UsageLockedUntil = until;
+                    LogRateLimited(candidate.Email.Value, (int)retryAfter.TotalSeconds);
+                    return new Turn(
+                        Outcome(RefreshOutcomeKind.RateLimited, RefreshMessages.RateLimited(retryAfter), until),
+                        EndsPass: true,
+                        SentRead: true);
+                }
+
+            default:
+                LogReadFailed(candidate.Email.Value, failure.Kind.ToString(), failure.Detail);
+                return new Turn(
+                    Outcome(
+                        RefreshOutcomeKind.ReadFailed,
+                        failure.Kind == UsageReadFailureKind.MalformedBody ? RefreshMessages.ReadFailedMalformed : RefreshMessages.ReadFailedTransport),
+                    SentRead: true);
+        }
+    }
+
+    /// <summary>
+    /// The token POST and the write-back, as one unit under the mutation gate and
+    /// under <see cref="CancellationToken.None"/>. Neither half may be abandoned
+    /// once the endpoint has answered: the old refresh token is dead from that
+    /// moment, so a cancellation between the POST and the write would strand the
+    /// only working lineage. Everything the unit decides on is read under the
+    /// gate, never before it.
+    /// </summary>
+    private async Task<GatedRefresh> RefreshUnderGateAsync(string folder, CredentialPair before)
+    {
+        IDisposable? permit = null;
+        try
+        {
+            try
+            {
+                permit = await _gate.AcquireAsync(_gateWait, CancellationToken.None);
+            }
+            catch (TimeoutException)
+            {
+                return Refused(RefreshOutcomeKind.Skipped, RefreshMessages.MutationInProgress);
+            }
+
+            // A login owns its folder for its whole ten-minute window and decides
+            // whose pair the folder holds by the credential file's digest; a
+            // rewrite underneath it would be judged as a login that never happened.
+            if (_logins.IsRunningAgainst(folder))
+            {
+                return Refused(RefreshOutcomeKind.Skipped, RefreshMessages.LoginInProgress);
+            }
+
+            CredentialPair? current = await _pairs.ReadParkedAsync(folder, CancellationToken.None);
+            if (current is null || current.Fingerprint != before.Fingerprint)
+            {
+                // A switch, a login, or a removal moved the pair between the read that
+                // chose this account and the gate. Refusing here is what keeps the
+                // POST from killing a refresh token that now belongs somewhere else.
+                return Refused(RefreshOutcomeKind.Skipped, RefreshMessages.PairChanged);
+            }
+
+            Result<RefreshedTokens, UsageReadFailure> refreshed = await _tokens().RefreshAsync(current.RefreshToken, CancellationToken.None);
+            if (refreshed.IsSuccess)
+            {
+                return await WriteBackAsync(folder, current, refreshed.Value);
+            }
+
+            if (refreshed.Error.Kind == UsageReadFailureKind.RateLimited)
+            {
+                TimeSpan retryAfter = Lockout(refreshed.Error.RetryAfter);
+                DateTimeOffset until = _timeProvider.GetUtcNow() + retryAfter;
+                _state.TokenLockedUntil = until;
+                LogTokenHostRateLimited((int)retryAfter.TotalSeconds);
+                return new GatedRefresh(
+                    Outcome(RefreshOutcomeKind.RateLimited, RefreshMessages.RateLimited(retryAfter), until),
+                    Pair: null,
+                    EndsPass: true);
+            }
+
+            LogTokenRefreshFailed(FolderName(folder), refreshed.Error.Kind.ToString(), refreshed.Error.Detail);
+            return Refused(RefreshOutcomeKind.TokenRefreshFailed, RefreshMessages.TokenRefreshFailed);
+        }
+        finally
+        {
+            permit?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Lands the rotated pair, or parks it where the next start can. A
+    /// <see cref="Result"/> failure from the store is deterministic — the only
+    /// two it has are "no parked pair" and "not the pair being replaced", and
+    /// both will say the same thing in a second — so it strands at once rather
+    /// than spending the retry budget on a settled answer. An exception is the
+    /// transient case: a file locked by a virus scanner, a folder momentarily
+    /// unwritable.
+    /// </summary>
+    private async Task<GatedRefresh> WriteBackAsync(string folder, CredentialPair current, RefreshedTokens tokens)
+    {
+        CredentialPair rotated = Rotate(current, tokens);
+        for (int attempt = 1; attempt <= _writeBackBackoff.Length; attempt++)
+        {
+            string transient;
+            try
+            {
+                Result<Unit, string> written = await _pairs.WriteParkedAsync(folder, rotated, current.Fingerprint, CancellationToken.None);
+                if (written.IsSuccess)
+                {
+                    // Guarded because the two fingerprints are sliced to build the
+                    // line: the rotation's audit trail is worth the slice only when
+                    // something is there to read it.
+                    if (_logger.IsEnabled(LogLevel.Information))
+                    {
+                        // CA1873 does not see through the guard to a source-generated
+                        // log method, and the two slices and the path segment below are
+                        // nothing next to the credential file this line records.
+#pragma warning disable CA1873 // Evaluation of this argument may be expensive
+                        LogRotated(FolderName(folder), current.Fingerprint.Sha256Hex[..12], rotated.Fingerprint.Sha256Hex[..12]);
+#pragma warning restore CA1873
+                    }
+
+                    return new GatedRefresh(Outcome: null, rotated);
+                }
+
+                LogWriteBackRefused(FolderName(folder), written.Error);
+                return await StrandAsync(folder, current.Fingerprint, rotated);
+            }
+            catch (IOException exception)
+            {
+                transient = exception.Message;
+            }
+            catch (UnauthorizedAccessException exception)
+            {
+                transient = exception.Message;
+            }
+            catch (InvalidDataException exception)
+            {
+                transient = exception.Message;
+            }
+
+            LogWriteBackRetried(FolderName(folder), attempt, transient);
+            await _pace(Jittered(_writeBackBackoff[attempt - 1]), CancellationToken.None);
+        }
+
+        return await StrandAsync(folder, current.Fingerprint, rotated);
+    }
+
+    private async Task<GatedRefresh> StrandAsync(string folder, RefreshTokenFingerprint expected, CredentialPair rotated)
+    {
+        if (await _recovery.WriteAsync(folder, expected, rotated, CancellationToken.None))
+        {
+            return Refused(RefreshOutcomeKind.Stranded, RefreshMessages.Stranded);
+        }
+
+        LogLost(FolderName(folder), expected.Sha256Hex[..12], rotated.Fingerprint.Sha256Hex[..12]);
+        return Refused(RefreshOutcomeKind.Lost, RefreshMessages.Lost);
+    }
+
+    /// <summary>
+    /// The rotated pair: the file's own bytes with four values replaced, so every
+    /// sibling key the CLI wrote (the subscription type, anything a later version
+    /// adds) survives the rewrite untouched. <c>refreshTokenExpiresAt</c> is kept
+    /// as it was when the response omitted <c>refresh_token_expires_in</c>;
+    /// writing nothing there would tell the page the login expired in 1970, and
+    /// dropping the key would lose the only record of when it really does.
+    /// </summary>
+    private static CredentialPair Rotate(CredentialPair current, RefreshedTokens tokens)
+    {
+        JsonObject raw = current.Raw.DeepClone().AsObject();
+        JsonObject oauth = raw["claudeAiOauth"]!.AsObject();
+        oauth["accessToken"] = tokens.AccessToken;
+        oauth["refreshToken"] = tokens.RefreshToken;
+        oauth["expiresAt"] = tokens.AccessTokenExpiresAt.ToUnixTimeMilliseconds();
+        if (tokens.LoginExpiresAt is DateTimeOffset loginExpiry)
+        {
+            oauth["refreshTokenExpiresAt"] = loginExpiry.ToUnixTimeMilliseconds();
+        }
+
+        // Cannot fail: the object came from a pair that parsed, and every value
+        // replaced above is of the shape the parse requires.
+        return CredentialPair.FromJson(raw).Value;
+    }
+
+    /// <summary>
+    /// The backoff with up to a fifth either way, from the cryptographic source
+    /// rather than <see cref="Random"/>: the value is not security-sensitive, but
+    /// it is the only randomness in the app and one source is one thing to reason
+    /// about.
+    /// </summary>
+    private static TimeSpan Jittered(TimeSpan backoff) =>
+        backoff * (1.0 + (RandomNumberGenerator.GetInt32(-200, 201) / 1000.0));
+
+    /// <summary>A 429's wait, floored: an absent or zero <c>Retry-After</c> is not an invitation to come straight back.</summary>
+    private static TimeSpan Lockout(TimeSpan? retryAfter) =>
+        retryAfter is TimeSpan wait && wait > TimeSpan.Zero ? wait : _lockoutFloor;
+
+    private static string FolderName(string folderPath) =>
+        Path.GetFileName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(folderPath)));
+
+    private RefreshOutcome Outcome(RefreshOutcomeKind kind, string message, DateTimeOffset? retryAt = null) =>
+        new(kind, message, retryAt, _timeProvider.GetUtcNow());
+
+    private GatedRefresh Refused(RefreshOutcomeKind kind, string message) =>
+        new(Outcome(kind, message), Pair: null);
+
+    /// <summary>The instant both hosts are clear again, or null when neither is locked out.</summary>
+    private DateTimeOffset? LockedUntil(DateTimeOffset now)
+    {
+        DateTimeOffset? usage = _state.UsageLockedUntil;
+        DateTimeOffset? token = _state.TokenLockedUntil;
+        DateTimeOffset? later = usage is null || token > usage ? token ?? usage : usage;
+        return later > now ? later : null;
+    }
+
+    /// <summary>What every candidate after a 429 reports: rate limited, with the same countdown, and nothing sent.</summary>
+    private RefreshOutcome LockedOut()
+    {
+        DateTimeOffset now = _timeProvider.GetUtcNow();
+        DateTimeOffset until = LockedUntil(now) ?? now;
+        return Outcome(RefreshOutcomeKind.RateLimited, RefreshMessages.RateLimited(until - now), until);
+    }
+
+    private RefreshOutcome BudgetRefused(AccountEmail account)
+    {
+        DateTimeOffset now = _timeProvider.GetUtcNow();
+        TimeSpan? wait = _budget.GapRemaining(account) ?? _budget.LockedOutFor(account);
+        string message = _state.LatestFor(account) is { Source: QuotaSource.OnDemandRefresh } latest
+            ? RefreshMessages.ReadRecently(now - latest.CapturedAt)
+            : RefreshMessages.BudgetSpent;
+        return Outcome(RefreshOutcomeKind.BudgetRefused, message, wait is TimeSpan remaining ? now + remaining : null);
+    }
+
+    /// <summary>
+    /// When this account's numbers were last actually taken from the endpoint,
+    /// which is what decides whose turn it is. A tee observation does not count:
+    /// it cost the endpoint nothing and so says nothing about fairness.
+    /// </summary>
+    private DateTimeOffset? LastReadAt(AccountEmail account) =>
+        _state.LatestFor(account) is { Source: QuotaSource.OnDemandRefresh or QuotaSource.Cached } snapshot
+            ? snapshot.CapturedAt
+            : null;
+
+    private void Record(AccountEmail account, RefreshOutcome outcome, Dictionary<RefreshOutcomeKind, int> summary)
+    {
+        _state.RecordOutcome(account, outcome);
+        summary[outcome.Kind] = summary.GetValueOrDefault(outcome.Kind) + 1;
+    }
+
+    /// <summary>One account the pass will read, and which pair it reads.</summary>
+    private sealed record Candidate(AccountEmail Email, string? FolderPath, bool IsLive);
+
+    /// <summary>How one account's turn ended, and what it cost the pass.</summary>
+    private sealed record Turn(RefreshOutcome Outcome, bool EndsPass = false, bool SentRead = false);
+
+    /// <summary>Either a rotated pair to read with, or the outcome that stopped the unit.</summary>
+    private sealed record GatedRefresh(RefreshOutcome? Outcome, CredentialPair? Pair, bool EndsPass = false);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "the refresh pass could not be built: {Failure}")]
+    private partial void LogPassFailed(string failure);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "the refresh of {Account} failed unexpectedly: {Failure}")]
+    private partial void LogTurnFailed(string account, string failure);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "rotated the credential pair for {Folder} ({Previous} to {Rotated})")]
+    private partial void LogRotated(string folder, string previous, string rotated);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "the write-back for {Folder} was refused by the store: {Reason}")]
+    private partial void LogWriteBackRefused(string folder, string reason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "write-back attempt {Attempt} for {Folder} failed: {Reason}")]
+    private partial void LogWriteBackRetried(string folder, int attempt, string reason);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "the rotated credential pair for {Folder} is lost (replacing {Previous}, rotated to {Rotated}); log that account in again")]
+    private partial void LogLost(string folder, string previous, string rotated);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "the token refresh for {Folder} failed ({Kind}): {Detail}")]
+    private partial void LogTokenRefreshFailed(string folder, string kind, string detail);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "the token host is rate limiting; no refresh for {Seconds} s")]
+    private partial void LogTokenHostRateLimited(int seconds);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "the usage host is rate limiting {Account}; no read for {Seconds} s")]
+    private partial void LogRateLimited(string account, int seconds);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "the usage read for {Account} failed ({Kind}): {Detail}")]
+    private partial void LogReadFailed(string account, string kind, string detail);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "the usage response for {Account} did not parse: {Reason}")]
+    private partial void LogReadUnparsable(string account, string reason);
+}
