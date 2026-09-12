@@ -57,10 +57,10 @@ internal sealed partial class QuotaRefresh
     private static readonly TimeSpan _spacing = TimeSpan.FromSeconds(1);
 
     /// <summary>
-    /// Three write-back attempts and the wait after each. The last wait is
-    /// deliberate: the recovery write that follows it touches the same directory
-    /// tree, so a file system that has just refused three writes is given the
-    /// same settling second before the rotated pair's last chance at disk.
+    /// Three write-back attempts and the wait after each, jittered. The wait
+    /// after the last attempt is counted too: 1.75 s of pacing is what the host's
+    /// shutdown budget is computed from, so the drain covers the unit's worst
+    /// case whether or not the final wait buys another try.
     /// </summary>
     private static readonly TimeSpan[] _writeBackBackoff =
         [TimeSpan.FromMilliseconds(250), TimeSpan.FromMilliseconds(500), TimeSpan.FromSeconds(1)];
@@ -146,6 +146,12 @@ internal sealed partial class QuotaRefresh
                 ended |= turn.EndsPass;
                 sentRead |= turn.SentRead;
             }
+        }
+        catch (OperationCanceledException) when (stopping.IsCancellationRequested)
+        {
+            // The host is shutting down mid-pace or mid-read. Ordinary, and not
+            // something to log at Error: the accounts already settled keep their
+            // outcomes and the rest wait for the next pass.
         }
 #pragma warning disable CA1031 // Do not catch general exception types
         catch (Exception exception)

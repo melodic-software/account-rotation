@@ -660,6 +660,30 @@ public sealed class LiveDirectorySwitchTests : IDisposable
         record["fingerprint"]!.GetValue<string>().ShouldBe(CredentialFiles.Pair("refresh-b-rotated").Fingerprint.Sha256Hex);
     }
 
+    [Fact]
+    public async Task ASwitchToAFolderStrandedInRecoveryIsRefused()
+    {
+        await CredentialFiles.WriteAsync(_liveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await WriteStateFileAsync("a@example.com");
+        await ParkedProfileAsync("b@example.com", "refresh-b");
+        // A refresh rotated b's pair and could not write it back, so the file still
+        // in b's folder holds the refresh token the token endpoint already killed.
+        Directory.CreateDirectory(Path.Combine(_appData, "recovery"));
+        await File.WriteAllTextAsync(
+            Path.Combine(_appData, "recovery", "b@example.com.credentials.json"),
+            "{}",
+            TestContext.Current.CancellationToken);
+
+        Result<SwitchOutcome, SwitchRefusal> result = await Switch().SwitchToAsync(Email("b@example.com"), TestContext.Current.CancellationToken);
+
+        result.Error.ShouldBe(SwitchRefusal.TargetStrandedInRecovery);
+        // Nothing moved: the restore still has the parked pair to compare against.
+        (await CredentialFiles.FingerprintAsync(_liveDirectory, TestContext.Current.CancellationToken))
+            .ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
+        (await CredentialFiles.FingerprintAsync(Path.Combine(_profilesRoot, "b@example.com"), TestContext.Current.CancellationToken))
+            .ShouldBe(CredentialFiles.Pair("refresh-b").Fingerprint);
+    }
+
     public void Dispose()
     {
         _gate.Dispose();

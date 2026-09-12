@@ -109,11 +109,23 @@ internal sealed partial class RecoveryFiles
     }
 
     /// <summary>Tries to apply one folder's recovery file, if it has one.</summary>
-    /// <returns>True when the folder no longer holds a strand.</returns>
+    /// <returns>
+    /// True when the folder no longer holds a strand, which covers two different
+    /// endings: the rotated pair went back into the folder, or the file was moved
+    /// aside because the folder had moved on without it. In both the folder's own
+    /// pair is the live lineage again and the account can be read. False only
+    /// while the file is still there waiting.
+    /// </returns>
     public async Task<bool> RestoreAsync(string folderPath, CancellationToken cancellationToken)
     {
         string path = PathFor(folderPath);
-        return !File.Exists(path) || await RestoreFileAsync(path, cancellationToken);
+        if (!File.Exists(path))
+        {
+            return true;
+        }
+
+        _ = await RestoreFileAsync(path, cancellationToken);
+        return !File.Exists(path);
     }
 
     /// <summary>
@@ -210,6 +222,12 @@ internal sealed partial class RecoveryFiles
             // profile reader both refuse such a path rather than following it.
             return KeptForLater(path, exception.Message);
         }
+        catch (InvalidDataException exception)
+        {
+            // The folder's own credential file no longer parses as a pair, so there
+            // is nothing to compare the envelope against yet.
+            return KeptForLater(path, exception.Message);
+        }
     }
 
     /// <summary>A warning naming the account when the folder still says who it is, and a folder-free sentence when it does not.</summary>
@@ -254,10 +272,12 @@ internal sealed partial class RecoveryFiles
             return null;
         }
 
+        // Every field read through TryGetValue, the reader convention for a file
+        // this process wrote but cannot assume: a number where a string belongs
+        // must read as absent, not throw out of a startup sweep.
         if (parsed is not JsonObject envelope
-            || envelope["folder"]?.GetValue<string>() is not string folder
-            || string.IsNullOrWhiteSpace(folder)
-            || envelope["expectedFingerprint"]?.GetValue<string>() is not string fingerprint
+            || Text(envelope, "folder") is not string folder
+            || Text(envelope, "expectedFingerprint") is not string fingerprint
             || envelope["pair"] is not JsonObject raw)
         {
             return null;
@@ -266,6 +286,9 @@ internal sealed partial class RecoveryFiles
         Result<CredentialPair, string> pair = CredentialPair.FromJson(raw);
         return pair.IsFailure ? null : new Envelope(folder, new RefreshTokenFingerprint(fingerprint), pair.Value);
     }
+
+    private static string? Text(JsonObject envelope, string key) =>
+        envelope[key] is JsonValue value && value.TryGetValue(out string? text) && !string.IsNullOrWhiteSpace(text) ? text : null;
 
     /// <summary>The file's three fields: whose folder, what it must still hold, and the pair to put there.</summary>
     private sealed record Envelope(string Folder, RefreshTokenFingerprint Expected, CredentialPair Pair);

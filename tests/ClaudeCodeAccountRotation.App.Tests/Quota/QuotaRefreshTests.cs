@@ -1,0 +1,438 @@
+using System.Text.Json.Nodes;
+using ClaudeCodeAccountRotation.App.Quota;
+using ClaudeCodeAccountRotation.Core.Identity;
+using ClaudeCodeAccountRotation.Core.Quota;
+
+namespace ClaudeCodeAccountRotation.App.Tests.Quota;
+
+/// <summary>
+/// The refresh pass over a real credential store on disk, with the two outbound
+/// ports scripted. The facts here are the security-sensitive ones: exactly one
+/// token POST per account per pass, the rotated pair written back or parked
+/// where it can be recovered, the live pair never refreshed, and no token in a
+/// log line or on a card.
+/// </summary>
+public sealed class QuotaRefreshTests
+{
+    private static CancellationToken Token => TestContext.Current.CancellationToken;
+
+    private static long Epoch(DateTimeOffset instant) => instant.ToUnixTimeMilliseconds();
+
+    [Fact]
+    public async Task ParkedPairUnauthorizedRefreshesOnceThenRetriesOnce()
+    {
+        using RefreshHarness harness = new();
+        string folder = await harness.ParkAsync("a@example.com", "refresh-a", harness.Valid, Token);
+        harness.Usage.Answers.Enqueue(ScriptedUsage.Failed(UsageReadFailureKind.Unauthorized));
+        harness.Usage.Answers.Enqueue(ScriptedUsage.Ok());
+        harness.Tokens.Answers.Enqueue(ScriptedTokens.Rotated("a2", harness.Valid, harness.Clock.GetUtcNow().AddDays(28)));
+
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        harness.Tokens.Calls.ShouldBe(1);
+        harness.Usage.Calls.ShouldBe(2);
+        harness.Usage.AccessTokens[1].ShouldBe("access-a2");
+        JsonObject oauth = await RefreshHarness.ParkedOAuthAsync(folder, Token);
+        oauth["refreshToken"]!.GetValue<string>().ShouldBe("refresh-a2");
+        oauth["expiresAt"]!.GetValue<long>().ShouldBe(Epoch(harness.Valid));
+        oauth["refreshTokenExpiresAt"]!.GetValue<long>().ShouldBe(Epoch(harness.Clock.GetUtcNow().AddDays(28)));
+        // The keys the tool knows nothing about survive the rewrite.
+        oauth["subscriptionType"]!.GetValue<string>().ShouldBe("max");
+        harness.OutcomeFor("a@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.Read);
+    }
+
+    [Fact]
+    public async Task AnExpiredParkedAccessTokenSkipsTheDoomedRead()
+    {
+        using RefreshHarness harness = new();
+        await harness.ParkAsync("a@example.com", "refresh-a", harness.Expired, Token);
+        harness.Usage.Answers.Enqueue(ScriptedUsage.Ok());
+        harness.Tokens.Answers.Enqueue(ScriptedTokens.Rotated("a2", harness.Valid, harness.Clock.GetUtcNow().AddDays(28)));
+
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        harness.Tokens.Calls.ShouldBe(1);
+        harness.Usage.Calls.ShouldBe(1);
+        harness.Usage.AccessTokens.Single().ShouldBe("access-a2");
+    }
+
+    [Fact]
+    public async Task AResponseWithoutRefreshExpiryKeepsTheOldValue()
+    {
+        using RefreshHarness harness = new();
+        DateTimeOffset loginExpiry = harness.Clock.GetUtcNow().AddDays(10);
+        string folder = await harness.ParkAsync("a@example.com", "refresh-a", harness.Expired, Token, loginExpiry);
+        harness.Usage.Answers.Enqueue(ScriptedUsage.Ok());
+        harness.Tokens.Answers.Enqueue(ScriptedTokens.Rotated("a2", harness.Valid, loginExpiresAt: null));
+
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        JsonObject oauth = await RefreshHarness.ParkedOAuthAsync(folder, Token);
+        oauth["refreshToken"]!.GetValue<string>().ShouldBe("refresh-a2");
+        oauth["refreshTokenExpiresAt"]!.GetValue<long>().ShouldBe(Epoch(loginExpiry));
+    }
+
+    [Fact]
+    public async Task LivePairIsNeverRefreshed()
+    {
+        using RefreshHarness harness = new();
+        await harness.WriteLiveIdentityAsync("live@example.com", Token);
+        await harness.WriteLivePairAsync("refresh-live", harness.Expired, Token);
+
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        harness.Tokens.Calls.ShouldBe(0);
+        harness.Usage.Calls.ShouldBe(0);
+        harness.OutcomeFor("live@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.SessionWillRefresh);
+    }
+
+    [Fact]
+    public async Task AMissingPairUnderTheGateSendsNoTokenPost()
+    {
+        using RefreshHarness harness = new();
+        string folder = await harness.ParkAsync("a@example.com", "refresh-a", harness.Expired, Token);
+        // The question is asked under the gate, immediately before the re-read.
+        harness.Logins.OnAsk = _ => File.Delete(Path.Combine(folder, CredentialFiles.FileName));
+
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        harness.Tokens.Calls.ShouldBe(0);
+        harness.Usage.Calls.ShouldBe(0);
+        RefreshOutcome outcome = harness.OutcomeFor("a@example.com")!;
+        outcome.Kind.ShouldBe(RefreshOutcomeKind.Skipped);
+        outcome.Message.ShouldBe(RefreshMessages.PairChanged);
+    }
+
+    [Fact]
+    public async Task APairThatChangedUnderTheGateIsNotRewritten()
+    {
+        using RefreshHarness harness = new();
+        string folder = await harness.ParkAsync("a@example.com", "refresh-a", harness.Expired, Token);
+        harness.Logins.OnAsk = _ => File.WriteAllText(
+            Path.Combine(folder, CredentialFiles.FileName),
+            CredentialFiles.Shape("refresh-somebody-else", harness.Expired, harness.Clock.GetUtcNow().AddDays(28)).ToJsonString());
+
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        harness.Tokens.Calls.ShouldBe(0);
+        harness.OutcomeFor("a@example.com")!.Message.ShouldBe(RefreshMessages.PairChanged);
+        (await RefreshHarness.ParkedOAuthAsync(folder, Token))["refreshToken"]!.GetValue<string>().ShouldBe("refresh-somebody-else");
+    }
+
+    [Fact]
+    public async Task ALoginInFlightBlocksTheWriteBack()
+    {
+        using RefreshHarness harness = new();
+        string folder = await harness.ParkAsync("a@example.com", "refresh-a", harness.Expired, Token);
+        harness.Logins.Busy.Add(Path.GetFullPath(folder));
+
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        harness.Tokens.Calls.ShouldBe(0);
+        RefreshOutcome outcome = harness.OutcomeFor("a@example.com")!;
+        outcome.Kind.ShouldBe(RefreshOutcomeKind.Skipped);
+        outcome.Message.ShouldBe(RefreshMessages.LoginInProgress);
+    }
+
+    [Fact]
+    public async Task AWriteBackExceptionRetriesThenStrands()
+    {
+        using RefreshHarness harness = new();
+        string folder = await harness.ParkAsync("a@example.com", "refresh-a", harness.Expired, Token);
+        harness.Store.ThrowOnWrite = true;
+        harness.Tokens.Answers.Enqueue(ScriptedTokens.Rotated("a2", harness.Valid, harness.Clock.GetUtcNow().AddDays(28)));
+
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        harness.Store.WriteAttempts.ShouldBe(3);
+        harness.Waits.Requested.Count.ShouldBe(3);
+        harness.OutcomeFor("a@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.Stranded);
+        harness.Recovery.HasRecoveryFor(folder).ShouldBeTrue();
+        // The rotated pair is what was parked, not the dead one still in the folder.
+        JsonObject envelope = await RecoveryEnvelopeAsync(harness, "a@example.com");
+        CredentialPair rescued = CredentialPair.FromJson(envelope["pair"]!.AsObject()).Value;
+        rescued.Fingerprint.ShouldBe(RefreshTokenFingerprint.FromRefreshToken("refresh-a2"));
+        envelope["expectedFingerprint"]!.GetValue<string>()
+            .ShouldBe(RefreshTokenFingerprint.FromRefreshToken("refresh-a").Sha256Hex);
+        harness.Usage.Calls.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task AWriteBackRefusedByTheStoreStrandsWithoutARetry()
+    {
+        using RefreshHarness harness = new();
+        string folder = await harness.ParkAsync("a@example.com", "refresh-a", harness.Expired, Token);
+        harness.Store.RefuseWriteWith = "the parked pair is no longer the one being replaced";
+        harness.Tokens.Answers.Enqueue(ScriptedTokens.Rotated("a2", harness.Valid, harness.Clock.GetUtcNow().AddDays(28)));
+
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        harness.Store.WriteAttempts.ShouldBe(1);
+        harness.Waits.Requested.ShouldBeEmpty();
+        harness.OutcomeFor("a@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.Stranded);
+        harness.Recovery.HasRecoveryFor(folder).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task AStrandedFolderIsRestoredOnDemand()
+    {
+        using RefreshHarness harness = new();
+        string folder = await harness.ParkAsync("a@example.com", "refresh-a", harness.Expired, Token);
+        harness.Store.ThrowOnWrite = true;
+        harness.Tokens.Answers.Enqueue(ScriptedTokens.Rotated("a2", harness.Valid, harness.Clock.GetUtcNow().AddDays(28)));
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+        harness.OutcomeFor("a@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.Stranded);
+
+        harness.Store.ThrowOnWrite = false;
+        harness.Clock.Advance(TimeSpan.FromMinutes(2));
+        harness.Usage.Answers.Enqueue(ScriptedUsage.Ok());
+
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        harness.Recovery.HasRecoveryFor(folder).ShouldBeFalse();
+        (await RefreshHarness.ParkedOAuthAsync(folder, Token))["refreshToken"]!.GetValue<string>().ShouldBe("refresh-a2");
+        // No second rotation: the restored pair's own access token is still good.
+        harness.Tokens.Calls.ShouldBe(1);
+        harness.Usage.AccessTokens.Single().ShouldBe("access-a2");
+        harness.OutcomeFor("a@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.Read);
+    }
+
+    [Fact]
+    public async Task AStaleRecoveryFileIsMovedAside()
+    {
+        using RefreshHarness harness = new();
+        string folder = await harness.ParkAsync("a@example.com", "refresh-a", harness.Expired, Token);
+        harness.Store.ThrowOnWrite = true;
+        harness.Tokens.Answers.Enqueue(ScriptedTokens.Rotated("a2", harness.Valid, harness.Clock.GetUtcNow().AddDays(28)));
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        // The folder was legitimately rewritten since, so the recovery file's
+        // compare-and-swap can never apply: it is an orphan lineage.
+        harness.Store.ThrowOnWrite = false;
+        await harness.ParkAsync("a@example.com", "refresh-a3", harness.Valid, Token);
+        harness.Clock.Advance(TimeSpan.FromMinutes(2));
+        harness.Usage.Answers.Enqueue(ScriptedUsage.Ok());
+
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        harness.Recovery.HasRecoveryFor(folder).ShouldBeFalse();
+        Directory.GetFiles(Path.Combine(harness.AppData, "recovery", "stale")).Length.ShouldBe(1);
+        (await RefreshHarness.ParkedOAuthAsync(folder, Token))["refreshToken"]!.GetValue<string>().ShouldBe("refresh-a3");
+        harness.State.RecoveryWarnings.ShouldContain(warning => warning.Contains("a@example.com", StringComparison.Ordinal));
+        // Moved aside is resolved, so the account is read rather than reported stranded.
+        harness.OutcomeFor("a@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.Read);
+    }
+
+    [Fact]
+    public async Task ARecoveryWriteFailureReportsLost()
+    {
+        using RefreshHarness harness = new();
+        await harness.ParkAsync("a@example.com", "refresh-a", harness.Expired, Token);
+        // A file where the recovery directory must go: the one portable way to
+        // make the last-resort write fail on every operating system this runs on.
+        await File.WriteAllTextAsync(Path.Combine(harness.AppData, "recovery"), "not a directory", Token);
+        harness.Store.ThrowOnWrite = true;
+        harness.Tokens.Answers.Enqueue(ScriptedTokens.Rotated("a2", harness.Valid, harness.Clock.GetUtcNow().AddDays(28)));
+
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        RefreshOutcome outcome = harness.OutcomeFor("a@example.com")!;
+        outcome.Kind.ShouldBe(RefreshOutcomeKind.Lost);
+        outcome.Message.ShouldBe(RefreshMessages.Lost);
+        string lost = harness.RefreshLog.Lines.Single(line => line.Contains("is lost", StringComparison.Ordinal));
+        lost.ShouldContain(RefreshTokenFingerprint.FromRefreshToken("refresh-a").Sha256Hex[..12]);
+        lost.ShouldContain(RefreshTokenFingerprint.FromRefreshToken("refresh-a2").Sha256Hex[..12]);
+        lost.ShouldNotContain("refresh-", Case.Sensitive);
+    }
+
+    [Fact]
+    public async Task AUsageRateLimitEndsThePassAndLocksEveryLaterRead()
+    {
+        using RefreshHarness harness = new();
+        await harness.ParkAsync("a@example.com", "refresh-a", harness.Valid, Token);
+        await harness.ParkAsync("b@example.com", "refresh-b", harness.Valid, Token);
+        await harness.ParkAsync("c@example.com", "refresh-c", harness.Valid, Token);
+        harness.Usage.Answers.Enqueue(ScriptedUsage.Failed(UsageReadFailureKind.RateLimited, TimeSpan.FromSeconds(30)));
+
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        harness.Usage.Calls.ShouldBe(1);
+        DateTimeOffset until = harness.Clock.GetUtcNow().AddSeconds(30);
+        harness.State.UsageLockedUntil.ShouldBe(until);
+        foreach (string email in new[] { "a@example.com", "b@example.com", "c@example.com" })
+        {
+            RefreshOutcome outcome = harness.OutcomeFor(email)!;
+            outcome.Kind.ShouldBe(RefreshOutcomeKind.RateLimited, email);
+            outcome.RetryAt.ShouldBe(until);
+            outcome.Message.ShouldBe("rate limited, retry in 30 s");
+        }
+    }
+
+    [Fact]
+    public async Task ATokenRateLimitEndsThePass()
+    {
+        using RefreshHarness harness = new();
+        await harness.ParkAsync("a@example.com", "refresh-a", harness.Expired, Token);
+        await harness.ParkAsync("b@example.com", "refresh-b", harness.Expired, Token);
+        harness.Tokens.Answers.Enqueue(ScriptedTokens.Failed(UsageReadFailureKind.RateLimited, TimeSpan.FromSeconds(30)));
+
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        harness.Tokens.Calls.ShouldBe(1);
+        harness.Usage.Calls.ShouldBe(0);
+        harness.State.TokenLockedUntil.ShouldBe(harness.Clock.GetUtcNow().AddSeconds(30));
+        harness.OutcomeFor("a@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.RateLimited);
+        harness.OutcomeFor("b@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.RateLimited);
+    }
+
+    [Fact]
+    public async Task AMissingRetryAfterLocksForFiveMinutes()
+    {
+        using RefreshHarness harness = new();
+        await harness.ParkAsync("a@example.com", "refresh-a", harness.Valid, Token);
+        harness.Usage.Answers.Enqueue(ScriptedUsage.Failed(UsageReadFailureKind.RateLimited, retryAfter: null));
+
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        harness.State.UsageLockedUntil.ShouldBe(harness.Clock.GetUtcNow().AddSeconds(300));
+        harness.OutcomeFor("a@example.com")!.Message.ShouldBe("rate limited, retry in 300 s");
+    }
+
+    [Fact]
+    public async Task ThreePassesWithARateLimitAtNineReadEveryAccount()
+    {
+        using RefreshHarness harness = new();
+        string[] accounts = [.. Enumerable.Range(0, 10).Select(index => "a" + index + "@example.com")];
+        foreach (string account in accounts)
+        {
+            await harness.ParkAsync(account, "refresh-" + account, harness.Valid, Token);
+        }
+
+        int readsThisPass = 0;
+        harness.Usage.AnswerAt = _ => ++readsThisPass == 9
+            ? ScriptedUsage.Failed(UsageReadFailureKind.RateLimited, retryAfter: null)
+            : ScriptedUsage.Ok();
+
+        for (int pass = 0; pass < 3; pass++)
+        {
+            readsThisPass = 0;
+            await harness.Engine.RunAsync(RefreshRequest.All, Token);
+            // Past the 300-second lockout and the budget's own 60-second gap.
+            harness.Clock.Advance(TimeSpan.FromSeconds(301));
+        }
+
+        // Eight reads land and the ninth is refused, every pass: the coverage
+        // claim is only worth anything if the rate limit really bit each time.
+        harness.Usage.Calls.ShouldBe(27);
+        foreach (string account in accounts)
+        {
+            harness.State.LatestFor(RefreshHarness.Email(account)).ShouldNotBeNull(account);
+        }
+    }
+
+    [Fact]
+    public async Task TheBudgetRefusesASecondReadInsideTheGap()
+    {
+        using RefreshHarness harness = new();
+        await harness.ParkAsync("a@example.com", "refresh-a", harness.Valid, Token);
+        // Its gated unit is refused, so it must not spend a reservation.
+        string blocked = await harness.ParkAsync("b@example.com", "refresh-b", harness.Expired, Token);
+        harness.Logins.Busy.Add(Path.GetFullPath(blocked));
+        harness.Usage.Answers.Enqueue(ScriptedUsage.Ok());
+
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        harness.Usage.Calls.ShouldBe(1);
+        RefreshOutcome refused = harness.OutcomeFor("a@example.com")!;
+        refused.Kind.ShouldBe(RefreshOutcomeKind.BudgetRefused);
+        refused.Message.ShouldBe("read 0 s ago");
+        refused.RetryAt.ShouldBe(harness.Clock.GetUtcNow().AddSeconds(60));
+        harness.Budget.GapRemaining(RefreshHarness.Email("b@example.com")).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task ThePassPacesOneSecondBetweenReads()
+    {
+        using RefreshHarness harness = new();
+        await harness.ParkAsync("a@example.com", "refresh-a", harness.Valid, Token);
+        await harness.ParkAsync("b@example.com", "refresh-b", harness.Valid, Token);
+        await harness.ParkAsync("c@example.com", "refresh-c", harness.Valid, Token);
+        harness.Usage.AnswerAt = _ => ScriptedUsage.Ok();
+
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        harness.Usage.Calls.ShouldBe(3);
+        harness.Waits.Requested.ShouldBe([TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1)]);
+    }
+
+    [Fact]
+    public async Task AStoppingTokenEndsThePassBetweenAccounts()
+    {
+        using RefreshHarness harness = new();
+        await harness.ParkAsync("a@example.com", "refresh-a", harness.Valid, Token);
+        await harness.ParkAsync("b@example.com", "refresh-b", harness.Valid, Token);
+        using CancellationTokenSource stopping = new();
+        harness.Usage.Answers.Enqueue(ScriptedUsage.Ok());
+        harness.Usage.BeforeAnswer = stopping.Cancel;
+
+        await harness.Engine.RunAsync(RefreshRequest.All, stopping.Token);
+
+        harness.Usage.Calls.ShouldBe(1);
+        harness.OutcomeFor("a@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.Read);
+        harness.OutcomeFor("b@example.com").ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task TheLiveAccountIsSkippedWhenItsIdentityIsBusy()
+    {
+        using RefreshHarness harness = new();
+        await harness.WriteLiveIdentityAsync("live@example.com", Token);
+        await harness.WriteLivePairAsync("refresh-live", harness.Valid, Token);
+        // A switch or a login holds the gate, so the stale-identity repair cannot
+        // run and nothing here can say whose pair the live directory holds.
+        using IDisposable held = await harness.Gate.AcquireAsync(TimeSpan.Zero, Token);
+
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        harness.Usage.Calls.ShouldBe(0);
+        RefreshOutcome outcome = harness.OutcomeFor("live@example.com")!;
+        outcome.Kind.ShouldBe(RefreshOutcomeKind.Skipped);
+        outcome.Message.ShouldBe(RefreshMessages.LiveIdentityUnverified);
+    }
+
+    [Fact]
+    public async Task NoLogLineOrOutcomeCarriesAToken()
+    {
+        using RefreshHarness harness = new();
+        await harness.ParkAsync("a@example.com", "refresh-a", harness.Expired, Token);
+        await harness.ParkAsync("b@example.com", "refresh-b", harness.Expired, Token);
+        // One account rotates and lands; the other rotates and strands, so the
+        // rotation log, the strand log, and the recovery envelope are all written.
+        harness.Logins.OnAsk = folder => harness.Store.ThrowOnWrite = folder.Contains("b@example.com", StringComparison.Ordinal);
+        harness.Tokens.AnswerAt = call => ScriptedTokens.Rotated("rotated" + call, harness.Valid, harness.Clock.GetUtcNow().AddDays(28));
+        harness.Usage.AnswerAt = _ => ScriptedUsage.Ok();
+
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        harness.OutcomeFor("a@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.Read);
+        harness.OutcomeFor("b@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.Stranded);
+        List<string> everythingWritten =
+        [
+            .. harness.RefreshLog.Lines,
+            .. harness.RecoveryLog.Lines,
+            .. harness.State.RecoveryWarnings,
+            harness.OutcomeFor("a@example.com")!.Message,
+            harness.OutcomeFor("b@example.com")!.Message,
+        ];
+        everythingWritten.ShouldNotBeEmpty();
+        everythingWritten.ShouldAllBe(line => !line.Contains("refresh-", StringComparison.Ordinal));
+        everythingWritten.ShouldAllBe(line => !line.Contains("access-", StringComparison.Ordinal));
+    }
+
+    private static async Task<JsonObject> RecoveryEnvelopeAsync(RefreshHarness harness, string email)
+    {
+        string path = Path.Combine(harness.AppData, "recovery", email + ".credentials.json");
+        return JsonNode.Parse(await File.ReadAllTextAsync(path, Token))!.AsObject();
+    }
+}
