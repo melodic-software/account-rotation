@@ -82,6 +82,14 @@ internal static class RefreshMessages
     public const string ReadFailedMalformed = "the usage endpoint answered something this build could not read";
     public const string Paused = "paused";
 
+    /// <summary>
+    /// A paused account whose login was about to lapse and was renewed instead.
+    /// It still carries no numbers, which is why it reports as a skip: nothing
+    /// was read, and the operator's read budget was not spent on an account that
+    /// is out of the rotation.
+    /// </summary>
+    public const string PausedLoginRenewed = "paused; login renewed";
+
     /// <summary>"rate limited, retry in N s", the countdown clamped at zero.</summary>
     public static string RateLimited(TimeSpan remaining) =>
         "rate limited, retry in " + Seconds(remaining) + " s";

@@ -75,7 +75,10 @@ All notable changes to this project are documented in this file. The format foll
   rather than falling back to `unknown`. A cached row whose window has reset since then still blanks
   through the same rule, which is what keeps `via cached` from meaning "a number from nowhere". The
   file holds percentages, reset times, bucket names, and account addresses, and no token of any
-  kind; a missing or unreadable one loads nothing rather than delaying the start.
+  kind; a missing or unreadable one loads nothing rather than delaying the start. A paused account is
+  read by no pass, which is what used to let its login run out unnoticed until a switch to it failed,
+  so `Refresh all` now renews the login of a paused account that is within a week of expiring —
+  one token request and the same write-back, no usage read and nothing taken from the read budget.
 - A repo-level `nuget.config` that clears every inherited package source and names nuget.org as the
   only one, for restore, audit, and package-source mapping alike. `dotnet restore --locked-mode`
   then resolves the same way on a developer machine whose user-level NuGet configuration enables
