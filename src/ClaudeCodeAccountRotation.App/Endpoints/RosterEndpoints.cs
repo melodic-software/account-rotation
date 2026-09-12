@@ -231,7 +231,7 @@ internal static class RosterEndpoints
                 {
                     return Refused(
                         "StrandedInRecovery",
-                        "That account's rotated credentials are held in the recovery directory and could not be put back, so a removal now would revoke the wrong login. Resolve the recovery file first: refresh that card, or restart the tool, then remove the account.");
+                        "That account's rotated credentials are held in the recovery directory and could not be put back, so a removal now would revoke the wrong login. The warning on this page says what that account needs; remove it once the recovery file is resolved.");
                 }
 
                 bool hasPair = File.Exists(Path.Combine(folder, FileSystemCredentialPairStore.FileName));

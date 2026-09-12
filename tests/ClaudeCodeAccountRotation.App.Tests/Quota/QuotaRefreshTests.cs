@@ -698,6 +698,35 @@ public sealed class QuotaRefreshTests
     }
 
     [Fact]
+    public async Task ARenewalThatNeverReachedTheEndpointIsTriedAgain()
+    {
+        // The other half of leaving a renewed login alone for a day: a token
+        // request that failed renewed nothing, so recording it would have the card
+        // say the login was renewed while it ran down to nothing over the day the
+        // record holds.
+        using RefreshHarness harness = new();
+        await harness.ParkAsync(
+            "a@example.com",
+            "refresh-a",
+            harness.Valid,
+            Token,
+            harness.Clock.GetUtcNow().AddDays(3));
+        await harness.PauseAsync("a@example.com", Token);
+        harness.Tokens.Answers.Enqueue(ScriptedTokens.Failed(UsageReadFailureKind.Transport));
+        harness.Tokens.Answers.Enqueue(ScriptedTokens.Rotated("a2", harness.Valid, harness.Clock.GetUtcNow().AddDays(28)));
+
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+        harness.OutcomeFor("a@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.TokenRefreshFailed);
+        harness.Clock.Advance(TimeSpan.FromHours(6));
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        harness.Tokens.Calls.ShouldBe(2);
+        RefreshOutcome outcome = harness.OutcomeFor("a@example.com")!;
+        outcome.Kind.ShouldBe(RefreshOutcomeKind.Skipped);
+        outcome.Message.ShouldBe(RefreshMessages.PausedLoginRenewed);
+    }
+
+    [Fact]
     public async Task APausedPairWithoutALoginExpiryIsLeftAlone()
     {
         // A pair whose file never carried a login expiry says nothing about when

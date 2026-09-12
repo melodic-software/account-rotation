@@ -486,10 +486,16 @@ internal sealed partial class QuotaRefresh
         GatedRefresh refreshed = await RefreshUnderGateAsync(candidate.FolderPath!, pair);
         // Every refusal the unit makes before it posts is a skip, and nothing it
         // decides after the endpoint has answered is one, so the kind is what says
-        // whether this turn owes the next candidate the spacing — and whether a
-        // request left the machine, which is what the interval above counts.
+        // whether this turn owes the next candidate the spacing.
         bool posted = refreshed.Outcome is null or { Kind: not RefreshOutcomeKind.Skipped };
-        if (posted)
+        // A renewal is recorded only where the endpoint answered with credentials:
+        // the login itself is renewed the moment it does, whether or not the write
+        // back landed, and a stranded pair is put back by the next restore. A
+        // transport failure or a 429 renewed nothing, and recording one would have
+        // the card claim a renewal for a day that never happened. Nor is a lost
+        // lineage recorded: the next pass would skip it as renewed and bury the one
+        // outcome the operator has to act on.
+        if (refreshed.Outcome is null or { Kind: RefreshOutcomeKind.Stranded })
         {
             _state.RecordLoginRenewal(candidate.FolderPath!, now);
         }
