@@ -98,3 +98,57 @@ revisit), human-decision.
   reads wrong in use.
 - discovery: the script's default app-data branch was exercised read-only on this machine
   (`recovery=0`); nothing under the real app data was written.
+
+## Phase 2: the snapshot cache file
+
+- deviation: plan said the cache is a plain class / found the analyzers demand `IDisposable`
+  over the merge semaphore and refuse an undisposed inline construction in the test harness /
+  chose `IDisposable` on the cache and an owned `Cache` member in `RefreshHarness` (`5c2a11b`) /
+  revisit: none.
+- deviation: plan said `SaveAsync` after every successful read / found a cancelled stopping token
+  threw out of the save and left an already-successful read with no recorded outcome / chose to
+  run the save to completion under `CancellationToken.None`, the gated write-back's precedent,
+  pinned by `ASaveRunsToCompletionUnderAPassTokenThatHasBeenCancelled` (`5c2a11b`) / revisit:
+  none.
+- deviation: plan said an unparsable e-mail, instant, or out-of-range percent drops the entry /
+  found a partially readable limit row is indistinguishable from a torn one / chose "loaded whole
+  or not at all", stricter than the tee reader, stated in the test's doc comment (`5c2a11b`) /
+  revisit: none.
+- deviation: plan said TDD one test at a time / found the no-op stub could not compile under the
+  analyzer posture / chose red-first for the round trip and the startup fact, tests-after with
+  four mutations for the rest (`5c2a11b`) / revisit: the phase verifier checks for vacuity.
+
+## Phase 3: paused accounts near login expiry
+
+- deviation: plan said paused renewals join the pass / found that appended last they would be
+  unreachable on a ten-account roster under a shared bucket, since a 429 at read nine marks
+  every later candidate without sending / chose to run renewals first, outside `RefreshOrder`,
+  never advancing the ordering key (`c5caeeb`) / revisit: none.
+- discovery: a renewal shares the turn's prologue, so a paused folder that is stranded reports
+  `Stranded` (and the restore runs), and a paused pair whose file vanished reports `NeedsLogin`;
+  neither sends a request.
+- deviation: plan said TDD one test at a time / found the two boundary facts pass before the
+  change as well as after / chose mutation checks for them (window widened to 30 days; the
+  single-account guard dropped), each failing its named fact (`c5caeeb`) / revisit: none.
+- discovery: `RefreshRequest.cs`'s doc comment still says "is not paused"; corrected in the Phase 4
+  close-out.
+
+## Phase 4: review lanes
+
+- discovery: the sub-brief (b) entry above claimed the token-host 401 and the second-401 cases were
+  pinned by tests in `448d927`; the code review found no test for either. The Phase 4 fix pass adds
+  them (the entry above stands as written; this one supersedes its claim).
+- discovery: the security lane found the per-turn recovery restore ran outside the credential
+  gate, that removing a stranded account left a valid lineage in `recovery/`, and that a
+  `JsonException` after a successful token POST could drop a rotated pair; all fixed in the Phase 4
+  fix pass with their named tests.
+- deviation: plan said `UsageSnapshotCache.SaveAsync` takes a cancellation token / found the token
+  was ignored by design and a parameter documented as ignored invites misuse / chose to drop it,
+  which deleted `ASaveRunsToCompletionUnderAPassTokenThatHasBeenCancelled` because no token can
+  now reach the save (`c8218e2`) / revisit: none.
+- deviation: the fix pass lowered four "pass failed / sweep failed / cache load failed" log lines
+  from Error to Warning while curating them (the lost-lineage line stays at Error) / revisit: raise
+  any of them back if the operator wants a pass failure to stand out in the log.
+- discovery: the fix-pass verifier found the post-POST catch-all unreachable by the suite (every
+  scripted write failure sat inside the retry filter); a further test throws an unfiltered
+  exception and asserts an immediate strand.

@@ -232,7 +232,7 @@ Work items, in order. TDD: each production item below is preceded by its red tes
      `ICredentialPairStore`, `ProfileFolderStore`, `RosterFile`, `ClaudeStateFile`,
      `LiveDirectorySwitch` (for `RepairStaleIdentityAsync`), `Func<IUsageEndpointClient>` and
      `Func<ITokenRefreshClient>` (the typed clients are transient; a singleton must not capture
-     one), `RefreshBudget`, `QuotaState`, `UsageSnapshotCache` (Phase 2; a no-op in Phase 1),
+     one), `RefreshBudget`, `QuotaState`, `UsageSnapshotCache` (a no-op seam until Phase 2 makes it real),
      `CredentialMutationGate`, `ILoginSessionRunner`, `RecoveryFiles`, `TimeProvider`, `ILogger`,
      and the pacing delegate `Func<TimeSpan, CancellationToken, Task> pace` (production:
      `(d, ct) => Task.Delay(d, timeProvider, ct)` registered in `AppComposition`; tests: a recorder
@@ -420,11 +420,11 @@ Release` went from 343 to 399 (1 skipped) with build, format, shellcheck, markdo
 and the machine-path check clean. A fresh-context phase verifier passed every sanity check and
 acceptance criterion and killed 15 of 15 mutations against the named tests. Untested by design:
 the 2-second gate wait and its timeout branch, the window-cap refusal sentence, and the page
-(no JavaScript harness; verified by reading and by a throwaway instance's payload). Flagged for
-the security lane: the engine's failure log lines carry `exception.ToString()`, which can hold a
-path; card messages never do. Deviations from the plan text are in `DEVIATIONS.md`.
+(no JavaScript harness; verified by reading and by a throwaway instance's payload). The security
+and code review lanes ran on the whole branch after Phase 3; their findings and the fix pass are
+recorded under Phase 4. Deviations from the plan text are in `DEVIATIONS.md`.
 
-### Phase 2: The snapshot cache file [TODO]
+### Phase 2: The snapshot cache file [DONE]
 
 1. `App/Quota/UsageSnapshotCache`: `<appdata>/state/usage-cache.json` through `AtomicJsonFile`;
    one entry per account with `capturedAt`, `source`, the limits (kind, raw kind, group, percent,
@@ -444,7 +444,11 @@ path; card messages never do. Deviations from the plan text are in `DEVIATIONS.m
 - `dotnet test -c Release` exit 0; `grep -c "Cached" src/ClaudeCodeAccountRotation.App/Quota/UsageSnapshotCache.cs` ≥ 1.
 - `grep -rn "usage-cache.json" src/ClaudeCodeAccountRotation.App/ | wc -l` ≥ 1 and the path is composed from `AppDataDirectory`, never a literal root (`bash eng/check-no-machine-paths.sh` clean).
 
-### Phase 3: Paused accounts near login expiry [TODO]
+**Done (2026-09-12):** `5c2a11b`, 399 → 407 tests. Verified with Phase 3 by one fresh-context
+verifier (12 of 12 criteria, every mutation killed by its named test). The merge mutex is
+verified by reading only; no test drives two concurrent saves.
+
+### Phase 3: Paused accounts near login expiry [DONE]
 
 1. In `QuotaRefresh.RunAsync` for an `All` request, a paused parked pair whose `LoginExpiresAt` is
    within 7 days of now is included with the gated refresh unit only (one token POST, write-back,
@@ -458,7 +462,11 @@ path; card messages never do. Deviations from the plan text are in `DEVIATIONS.m
 
 - `dotnet test -c Release` exit 0; `grep -c "PausedPairNearLoginExpiryIsRefreshed" tests/ClaudeCodeAccountRotation.App.Tests/Quota/QuotaRefreshTests.cs` prints `1`.
 
-### Phase 4: Close-out [TODO]
+**Done (2026-09-12):** `c5caeeb`, 407 → 410 tests. Renewals run first in the pass, outside
+`RefreshOrder`, so a 429 earlier in the pass cannot starve them; the verifier confirmed the
+placement by reading and the window and single-account guards by mutation.
+
+### Phase 4: Close-out [DONE]
 
 1. Parent plan `docs/topics/claude-subscription-rotation/PLAN.md`: tick 2.1 to 2.4 with a dated
    note naming PR #15; tick 2.5 and 2.6 with a dated note naming this PR and what moved out (login
@@ -484,6 +492,15 @@ path; card messages never do. Deviations from the plan text are in `DEVIATIONS.m
 - `grep -c "scope-change" docs/topics/claude-subscription-rotation/PLAN.md` ≥ 2 (Phase 2 sanity and Phase 3 sanity notes).
 - `grep -c "\[DONE\]" docs/topics/usage-cards/PLAN.md` prints `4` before the PR is merged.
 - `gh pr view --json state` prints `MERGED`.
+
+**Done (2026-09-12):** the parent plan carries the six ticks and three dated scope-change notes.
+The security lane (no P1/P2; three P3: the per-turn restore ran outside the gate, removing a
+stranded account left a valid lineage in `recovery/`, a `JsonException` after the token POST could
+drop a rotated pair; three P4; one P5) and the code lane (no blockers; five should-fix, eleven
+nits) ran on the whole branch; every finding was fixed in `c8218e2`, `2efd3ab`, `3abef18`, and a
+fresh-context verifier of that fix pass found one unguarded path (the post-POST catch-all), closed
+by a further test. 343 → 427 tests plus that test. The PR, the squash-merge, and the install of the
+merged build on the operator's machine are the last items.
 
 ## Blast radius
 
