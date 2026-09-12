@@ -45,7 +45,7 @@ internal sealed class RefreshHarness : IDisposable
         Profiles = new ProfileFolderStore(ProfilesRoot);
         _roster = new RosterFile(AppData);
         ClaudeStateFile stateFile = new(StateFilePath);
-        Recovery = new RecoveryFiles(options, Store, Profiles, State, RecoveryLog);
+        Recovery = new RecoveryFiles(options, Store, Profiles, State, RecoveryLog, Clock);
         Executor = new LiveDirectorySwitch(
             Store,
             stateFile,
@@ -77,8 +77,15 @@ internal sealed class RefreshHarness : IDisposable
             Recovery,
             Clock,
             Waits.Record,
-            RefreshLog);
+            RefreshLog,
+            // The gate wait production spends two seconds on. A test that holds
+            // the gate against a pass asserts the refusal, not the patience, and
+            // the two seconds would be two seconds of a test suite's life.
+            GateWait);
     }
+
+    /// <summary>How long this harness's engine waits for the mutation gate before it gives the turn up.</summary>
+    public static TimeSpan GateWait => TimeSpan.FromMilliseconds(50);
 
     public string Root { get; }
 
@@ -133,19 +140,31 @@ internal sealed class RefreshHarness : IDisposable
 
     public string FolderFor(string email) => Path.Combine(ProfilesRoot, email);
 
-    /// <summary>Parks one account with a credential pair and a profile, both expiries stated outright.</summary>
+    /// <summary>
+    /// Parks one account with a credential pair and a profile, both expiries
+    /// stated outright. <paramref name="withoutLoginExpiry"/> writes the pair the
+    /// way a CLI that never recorded a login lifetime wrote it: the key absent
+    /// rather than zero, which is the one shape a renewal must never act on.
+    /// </summary>
     public async Task<string> ParkAsync(
         string email,
         string refreshToken,
         DateTimeOffset accessTokenExpiresAt,
         CancellationToken cancellationToken,
-        DateTimeOffset? loginExpiresAt = null)
+        DateTimeOffset? loginExpiresAt = null,
+        bool withoutLoginExpiry = false)
     {
         string folder = FolderFor(email);
         Directory.CreateDirectory(folder);
+        JsonObject shape = CredentialFiles.Shape(refreshToken, accessTokenExpiresAt, loginExpiresAt ?? Clock.GetUtcNow().AddDays(28));
+        if (withoutLoginExpiry)
+        {
+            shape["claudeAiOauth"]!.AsObject().Remove("refreshTokenExpiresAt");
+        }
+
         await File.WriteAllTextAsync(
             Path.Combine(folder, CredentialFiles.FileName),
-            CredentialFiles.Shape(refreshToken, accessTokenExpiresAt, loginExpiresAt ?? Clock.GetUtcNow().AddDays(28)).ToJsonString(),
+            shape.ToJsonString(),
             cancellationToken);
         await File.WriteAllTextAsync(
             Path.Combine(folder, "profile.json"),
@@ -190,6 +209,12 @@ internal sealed class RefreshHarness : IDisposable
         {
             Directory.Delete(Root, recursive: true);
         }
+
+        // Last, after the temp directory is gone: a test whose script had a gap
+        // fails here rather than reading the engine's own catch-all as the
+        // engine's answer.
+        Usage.Unscripted.ShouldBeFalse("the pass made a usage read this test did not script");
+        Tokens.Unscripted.ShouldBeFalse("the pass made a token refresh this test did not script");
     }
 
     private readonly RosterFile _roster;

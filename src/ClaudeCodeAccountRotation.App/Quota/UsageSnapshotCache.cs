@@ -51,18 +51,18 @@ internal sealed class UsageSnapshotCache : IDisposable
     /// restart's memory and must not turn a successful read into a failed one on
     /// the card.
     /// <para>
-    /// The save itself runs to completion whatever <paramref name="cancellationToken"/>
-    /// says, the same reasoning the gated write-back runs under: by the time this
-    /// is called the read has already been paid for out of the rate window, and a
-    /// shutdown arriving between the read and this write would throw that read
-    /// away and leave the pass's own outcome unrecorded. The section is one small
-    /// file written beside its temp, well inside the host's drain.
+    /// It takes no cancellation token, which is the point rather than an
+    /// oversight: the same reasoning the gated write-back runs under. By the time
+    /// this is called the read has already been paid for out of the rate window,
+    /// and a shutdown arriving between the read and this write would throw that
+    /// read away and leave the pass's own outcome unrecorded. Having no parameter
+    /// at all is what makes that unarguable at every call site. The section is one
+    /// small file written beside its temp, well inside the host's drain.
     /// </para>
     /// </summary>
-    public async Task SaveAsync(AccountEmail account, UsageSnapshot snapshot, CancellationToken cancellationToken)
+    public async Task SaveAsync(AccountEmail account, UsageSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
-        _ = cancellationToken;
         await _mutex.WaitAsync(CancellationToken.None);
         try
         {

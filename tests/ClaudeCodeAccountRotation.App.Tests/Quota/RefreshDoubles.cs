@@ -28,6 +28,15 @@ internal sealed class ScriptedUsage : IUsageEndpointClient
     /// <summary>Runs inside the read, before it answers: the seam a test uses to change the world mid-pass.</summary>
     public Action? BeforeAnswer { get; set; }
 
+    /// <summary>
+    /// Set when a call arrived that the test never scripted. Recorded rather
+    /// than thrown, because the engine's per-account catch turns any exception
+    /// from here into a read failure: a test with a gap in its script would
+    /// otherwise pass while proving nothing about the engine. The harness
+    /// asserts this on dispose, so the gap fails the test that has it.
+    /// </summary>
+    public bool Unscripted { get; private set; }
+
     public int Calls => AccessTokens.Count;
 
     public static Result<JsonDocument, UsageReadFailure> Ok(string body = """{"limits":[{"kind":"session","percent":43,"is_active":true}]}""") =>
@@ -48,9 +57,13 @@ internal sealed class ScriptedUsage : IUsageEndpointClient
             return Task.FromResult(Answers.Dequeue());
         }
 
-        return AnswerAt is not null
-            ? Task.FromResult(AnswerAt(AccessTokens.Count))
-            : throw new InvalidOperationException("The pass made an unscripted usage read (call " + AccessTokens.Count + ").");
+        if (AnswerAt is not null)
+        {
+            return Task.FromResult(AnswerAt(AccessTokens.Count));
+        }
+
+        Unscripted = true;
+        return Task.FromResult(Failed(UsageReadFailureKind.Transport));
     }
 }
 
@@ -62,6 +75,9 @@ internal sealed class ScriptedTokens : ITokenRefreshClient
     public Queue<Result<RefreshedTokens, UsageReadFailure>> Answers { get; } = new();
 
     public Func<int, Result<RefreshedTokens, UsageReadFailure>>? AnswerAt { get; set; }
+
+    /// <summary>Set when a token refresh arrived that the test never scripted; asserted by the harness on dispose.</summary>
+    public bool Unscripted { get; private set; }
 
     public int Calls => RefreshTokens.Count;
 
@@ -89,9 +105,13 @@ internal sealed class ScriptedTokens : ITokenRefreshClient
             return Task.FromResult(Answers.Dequeue());
         }
 
-        return AnswerAt is not null
-            ? Task.FromResult(AnswerAt(RefreshTokens.Count))
-            : throw new InvalidOperationException("The pass made an unscripted token refresh (call " + RefreshTokens.Count + ").");
+        if (AnswerAt is not null)
+        {
+            return Task.FromResult(AnswerAt(RefreshTokens.Count));
+        }
+
+        Unscripted = true;
+        return Task.FromResult(Failed(UsageReadFailureKind.Transport));
     }
 }
 
@@ -131,8 +151,11 @@ internal sealed class ScriptedLogins : ILoginSessionRunner
 /// </summary>
 internal sealed class FaultyPairStore(ICredentialPairStore inner) : ICredentialPairStore
 {
-    /// <summary>Every write-back throws, the way a locked file does.</summary>
-    public bool ThrowOnWrite { get; set; }
+    /// <summary>A locked credential file, the transient failure the write-back retries.</summary>
+    public static IOException Locked => new("the credential file is locked by another process");
+
+    /// <summary>Every write-back throws this, or none does when it is null.</summary>
+    public Exception? ThrowOnWriteWith { get; set; }
 
     /// <summary>Every write-back returns this failure, the way a fingerprint mismatch does.</summary>
     public string? RefuseWriteWith { get; set; }
@@ -157,9 +180,9 @@ internal sealed class FaultyPairStore(ICredentialPairStore inner) : ICredentialP
     public Task<Result<Unit, string>> WriteParkedAsync(string folderPath, CredentialPair pair, RefreshTokenFingerprint expected, CancellationToken cancellationToken)
     {
         WriteAttempts++;
-        if (ThrowOnWrite)
+        if (ThrowOnWriteWith is Exception fault)
         {
-            throw new IOException("the credential file is locked by another process");
+            throw fault;
         }
 
         return RefuseWriteWith is string refusal

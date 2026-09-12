@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
@@ -36,9 +37,13 @@ internal sealed partial class RecoveryFiles
     public const string StaleDirectoryName = "stale";
     private const string FileSuffix = ".credentials.json";
 
+    private static readonly StringComparison _folderComparison =
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
     private readonly ICredentialPairStore _pairs;
     private readonly ProfileFolderStore _profiles;
     private readonly QuotaState _state;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<RecoveryFiles> _logger;
     private readonly string _directory;
     private readonly string _staleDirectory;
@@ -48,13 +53,18 @@ internal sealed partial class RecoveryFiles
         ICredentialPairStore pairs,
         ProfileFolderStore profiles,
         QuotaState state,
-        ILogger<RecoveryFiles> logger)
+        ILogger<RecoveryFiles> logger,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         _pairs = pairs;
         _profiles = profiles;
         _state = state;
         _logger = logger;
+        // Only the stale-file stamp reads it, so a caller with no clock of its own
+        // may leave it out; the container hands in the one clock everything else
+        // here is measured against.
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _directory = Path.Combine(Path.GetFullPath(options.AppDataDirectory), DirectoryName);
         _staleDirectory = Path.Combine(_directory, StaleDirectoryName);
     }
@@ -96,14 +106,14 @@ internal sealed partial class RecoveryFiles
             LogStranded(FolderName(folderPath), expected.Sha256Hex[..12], pair.Fingerprint.Sha256Hex[..12]);
             return true;
         }
-        catch (IOException exception)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            LogRecoveryWriteFailed(FolderName(folderPath), exception.Message);
-            return false;
-        }
-        catch (UnauthorizedAccessException exception)
-        {
-            LogRecoveryWriteFailed(FolderName(folderPath), exception.Message);
+            // The type, not the message: a file-system message quotes the path it
+            // failed on, and this line is read at Error on a page the operator has
+            // open. The exception itself is there at Debug for whoever is debugging.
+            string folder = FolderName(folderPath);
+            LogRecoveryWriteFailed(folder, exception.GetType().Name);
+            LogRecoveryWriteFailedDetail(folder, exception);
             return false;
         }
     }
@@ -152,14 +162,40 @@ internal sealed partial class RecoveryFiles
     private string PathFor(string folderPath) =>
         Path.Combine(_directory, FolderName(folderPath) + FileSuffix);
 
+    /// <summary>
+    /// Which folder a recovery file belongs to, read off the file's own name.
+    /// The inverse of <see cref="PathFor"/>, so the key a warning is filed under
+    /// is the same whether it is derived from the file or from the envelope.
+    /// </summary>
+    private static string FolderKeyFor(string recoveryFilePath) =>
+        Path.GetFileName(recoveryFilePath)[..^FileSuffix.Length];
+
     private async Task<bool> RestoreFileAsync(string path, CancellationToken cancellationToken)
     {
+        // Every warning this file raises is filed under the folder it belongs to,
+        // which is exactly what its own name carries. A warning filed under the
+        // file's path instead could never be cleared, because a restore that
+        // succeeds knows only the folder, and the page would keep showing a
+        // sentence about a file that is long gone.
+        string folder = FolderKeyFor(path);
         try
         {
             if (await ReadEnvelopeAsync(path, cancellationToken) is not Envelope envelope)
             {
                 MoveAside(path);
-                _state.WarnRecovery(path, RefreshMessages.RestoreUnreadable());
+                _state.WarnRecovery(folder, RefreshMessages.RestoreUnreadable());
+                return false;
+            }
+
+            if (!string.Equals(FolderName(envelope.Folder), folder, _folderComparison))
+            {
+                // The file name is what says which folder an envelope belongs to,
+                // and the sweep trusts that name when it picks the files to apply.
+                // An envelope naming a different folder was renamed by hand or was
+                // never written here at all; applying it would rewrite a folder
+                // nobody filed it under.
+                MoveAside(path);
+                _state.WarnRecovery(folder, RefreshMessages.RestoreMisfiled());
                 return false;
             }
 
@@ -170,7 +206,7 @@ internal sealed partial class RecoveryFiles
                 // The folder has no pair to compare against, so the compare-and-swap
                 // cannot run and the rotated pair stays here. Deleting it would throw
                 // away the one working lineage; a fresh login is the way out.
-                _state.WarnRecovery(envelope.Folder, Warning(account, RefreshMessages.RestoreNeedsLogin));
+                _state.WarnRecovery(folder, Warning(account, RefreshMessages.RestoreNeedsLogin, RefreshMessages.RestoreKept));
                 return false;
             }
 
@@ -181,7 +217,7 @@ internal sealed partial class RecoveryFiles
                 // aside owner-only rather than deleted, and named so the operator can
                 // decide whether to revoke it.
                 MoveAside(path);
-                _state.WarnRecovery(envelope.Folder, Warning(account, RefreshMessages.RestoreStale));
+                _state.WarnRecovery(folder, Warning(account, RefreshMessages.RestoreStale, RefreshMessages.RestoreUnreadable));
                 return false;
             }
 
@@ -189,12 +225,12 @@ internal sealed partial class RecoveryFiles
             if (written.IsFailure)
             {
                 LogRestoreRefused(FolderName(envelope.Folder), written.Error);
-                _state.WarnRecovery(envelope.Folder, Warning(account, RefreshMessages.RestoreNeedsLogin));
+                _state.WarnRecovery(folder, Warning(account, RefreshMessages.RestoreRefused, RefreshMessages.RestoreKept));
                 return false;
             }
 
             File.Delete(path);
-            _state.ClearRecoveryWarning(envelope.Folder);
+            _state.ClearRecoveryWarning(folder);
             // Guarded because the two fingerprints are sliced to build the line:
             // the audit trail is worth the slice only when something reads it.
             if (_logger.IsEnabled(LogLevel.Information))
@@ -210,34 +246,42 @@ internal sealed partial class RecoveryFiles
         }
         catch (IOException exception)
         {
-            return KeptForLater(path, exception.Message);
+            return KeptForLater(folder, exception);
         }
         catch (UnauthorizedAccessException exception)
         {
-            return KeptForLater(path, exception.Message);
+            return KeptForLater(folder, exception);
         }
         catch (ArgumentException exception)
         {
             // The envelope named a folder that is not one of ours. The store and the
             // profile reader both refuse such a path rather than following it.
-            return KeptForLater(path, exception.Message);
+            return KeptForLater(folder, exception);
         }
         catch (InvalidDataException exception)
         {
             // The folder's own credential file no longer parses as a pair, so there
             // is nothing to compare the envelope against yet.
-            return KeptForLater(path, exception.Message);
+            return KeptForLater(folder, exception);
+        }
+        catch (JsonException exception)
+        {
+            // The folder's own credential file is torn rather than merely wrong, so
+            // the read of it throws before the pair is built. One folder caught
+            // mid-write must not end the sweep for the other nine.
+            return KeptForLater(folder, exception);
         }
     }
 
-    /// <summary>A warning naming the account when the folder still says who it is, and a folder-free sentence when it does not.</summary>
-    private static string Warning(AccountEmail? account, Func<AccountEmail, string> named) =>
-        account is AccountEmail known ? named(known) : RefreshMessages.RestoreUnreadable();
+    /// <summary>A warning naming the account when the folder still says who it is, and an account-free sentence when it does not.</summary>
+    private static string Warning(AccountEmail? account, Func<AccountEmail, string> named, Func<string> anonymous) =>
+        account is AccountEmail known ? named(known) : anonymous();
 
-    private bool KeptForLater(string path, string reason)
+    private bool KeptForLater(string folder, Exception exception)
     {
-        LogRestoreFailed(Path.GetFileName(path), reason);
-        _state.WarnRecovery(path, RefreshMessages.RestoreUnreadable());
+        LogRestoreFailed(folder, exception.GetType().Name);
+        LogRestoreFailedDetail(folder, exception);
+        _state.WarnRecovery(folder, RefreshMessages.RestoreKept());
         return false;
     }
 
@@ -253,11 +297,23 @@ internal sealed partial class RecoveryFiles
         }
     }
 
+    /// <summary>
+    /// Moves one recovery file into <c>stale/</c>, stamped with the instant it
+    /// was moved and never over an earlier one. Two orphans for the same folder
+    /// are two lineages, and overwriting the first to make room for the second
+    /// would destroy exactly what this directory exists to keep. The stamp sits
+    /// before the suffix so the acceptance script's <c>*.credentials.json</c>
+    /// sweep still counts these files.
+    /// </summary>
     private void MoveAside(string path)
     {
         Directory.CreateDirectory(_staleDirectory);
+        string stamped = FolderKeyFor(path)
+            + "."
+            + _timeProvider.GetUtcNow().UtcDateTime.ToString("yyyyMMdd'T'HHmmssfff'Z'", CultureInfo.InvariantCulture)
+            + FileSuffix;
         // A rename, never a copy: a credential-bearing file moves or it stays.
-        File.Move(path, Path.Combine(_staleDirectory, Path.GetFileName(path)), overwrite: true);
+        File.Move(path, Path.Combine(_staleDirectory, stamped), overwrite: false);
     }
 
     private static async Task<Envelope?> ReadEnvelopeAsync(string path, CancellationToken cancellationToken)
@@ -296,8 +352,11 @@ internal sealed partial class RecoveryFiles
     [LoggerMessage(Level = LogLevel.Warning, Message = "credential pair for {Folder} stranded in recovery (replacing {Expected}, rotated to {Rotated})")]
     private partial void LogStranded(string folder, string expected, string rotated);
 
-    [LoggerMessage(Level = LogLevel.Error, Message = "the rotated credential pair for {Folder} could not be written to recovery and is lost: {Reason}")]
-    private partial void LogRecoveryWriteFailed(string folder, string reason);
+    [LoggerMessage(Level = LogLevel.Error, Message = "the rotated credential pair for {Folder} could not be written to recovery and is lost ({Failure})")]
+    private partial void LogRecoveryWriteFailed(string folder, string failure);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "the recovery write for {Folder} failed")]
+    private partial void LogRecoveryWriteFailedDetail(string folder, Exception exception);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "recovery restored the credential pair for {Folder} ({Expected} to {Rotated})")]
     private partial void LogRestored(string folder, string expected, string rotated);
@@ -305,6 +364,9 @@ internal sealed partial class RecoveryFiles
     [LoggerMessage(Level = LogLevel.Warning, Message = "recovery for {Folder} was refused by the store: {Reason}")]
     private partial void LogRestoreRefused(string folder, string reason);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "recovery file {FileName} could not be applied and was kept: {Reason}")]
-    private partial void LogRestoreFailed(string fileName, string reason);
+    [LoggerMessage(Level = LogLevel.Warning, Message = "the recovery file for {Folder} could not be applied and was kept ({Failure})")]
+    private partial void LogRestoreFailed(string folder, string failure);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "the recovery file for {Folder} could not be applied")]
+    private partial void LogRestoreFailedDetail(string folder, Exception exception);
 }

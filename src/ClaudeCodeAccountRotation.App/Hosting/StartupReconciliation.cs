@@ -51,7 +51,8 @@ internal sealed partial class StartupReconciliation(
         catch (Exception exception)
 #pragma warning restore CA1031
         {
-            LogRestoreSweepFailed(exception.ToString());
+            LogRestoreSweepFailed(exception.GetType().Name);
+            LogRestoreSweepFailedDetail(exception);
         }
     }
 
@@ -79,19 +80,30 @@ internal sealed partial class StartupReconciliation(
         catch (Exception exception)
 #pragma warning restore CA1031
         {
-            LogCacheLoadFailed(exception.ToString());
+            LogCacheLoadFailed(exception.GetType().Name);
+            LogCacheLoadFailedDetail(exception);
         }
     }
 
     [LoggerMessage(Level = LogLevel.Information, Message = "startup reconciliation: {JournalOutcome}; quarantined {QuarantinedCount}; switching blocked: {Blocked}")]
     private partial void LogReconciled(string journalOutcome, int quarantinedCount, bool blocked);
 
-    [LoggerMessage(Level = LogLevel.Error, Message = "the recovery sweep could not run: {Failure}")]
+    // The type and the curated reason where the operator will see them, the
+    // exception itself at Debug: a stack trace from a startup sweep over the
+    // profiles root quotes paths, and this console is read beside ten real
+    // accounts.
+    [LoggerMessage(Level = LogLevel.Warning, Message = "the recovery sweep could not run ({Failure})")]
     private partial void LogRestoreSweepFailed(string failure);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "the recovery sweep could not run")]
+    private partial void LogRestoreSweepFailedDetail(Exception exception);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "loaded cached usage for {AccountCount} account(s)")]
     private partial void LogCacheLoaded(int accountCount);
 
-    [LoggerMessage(Level = LogLevel.Error, Message = "the cached usage could not be loaded: {Failure}")]
+    [LoggerMessage(Level = LogLevel.Warning, Message = "the cached usage could not be loaded ({Failure})")]
     private partial void LogCacheLoadFailed(string failure);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "the cached usage could not be loaded")]
+    private partial void LogCacheLoadFailedDetail(Exception exception);
 }

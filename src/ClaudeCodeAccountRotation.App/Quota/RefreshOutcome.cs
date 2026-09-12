@@ -90,6 +90,15 @@ internal static class RefreshMessages
     /// </summary>
     public const string PausedLoginRenewed = "paused; login renewed";
 
+    /// <summary>
+    /// A paused account whose login was renewed recently enough that renewing it
+    /// again would buy nothing. The token response need not say when the login
+    /// now expires, and when it does not the recorded expiry stays where it was,
+    /// so without this sentence the same account would be posted for on every
+    /// pass for the rest of its login.
+    /// </summary>
+    public const string PausedLoginRenewedRecently = "paused; login renewed recently";
+
     /// <summary>"rate limited, retry in N s", the countdown clamped at zero.</summary>
     public static string RateLimited(TimeSpan remaining) =>
         "rate limited, retry in " + Seconds(remaining) + " s";
@@ -111,6 +120,15 @@ internal static class RefreshMessages
     public static string RestoreNeedsLogin(AccountEmail account) =>
         "The rotated credentials for " + account.Value + " are held in the recovery directory and no parked pair is there to replace; log that account in again.";
 
+    /// <summary>
+    /// The recovery warning for a file the store refused to apply although the
+    /// folder does still hold a pair. Its own sentence rather than the one above,
+    /// which says there is nothing in the folder to replace and would be false
+    /// here.
+    /// </summary>
+    public static string RestoreRefused(AccountEmail account) =>
+        "The rotated credentials for " + account.Value + " could not be written back and are kept in the recovery directory; the next start, or that card's Refresh, tries again.";
+
     /// <summary>The recovery warning for a file whose folder was legitimately rewritten since.</summary>
     public static string RestoreStale(AccountEmail account) =>
         "A recovery file for " + account.Value + " no longer matches that account's parked credentials and was moved aside; the parked pair on disk is the live lineage.";
@@ -118,6 +136,25 @@ internal static class RefreshMessages
     /// <summary>The recovery warning for a file that could not be read at all.</summary>
     public static string RestoreUnreadable() =>
         "A recovery file could not be read and was moved aside; if an account reports needing a login, log it in again.";
+
+    /// <summary>
+    /// The recovery warning for a file whose envelope names a different folder
+    /// than the file is filed under. The file name is what the sweep trusts when
+    /// it decides which folder to rewrite, so a file that disagrees with itself
+    /// is moved aside rather than applied to either.
+    /// </summary>
+    public static string RestoreMisfiled() =>
+        "A recovery file did not name the account folder it was filed under and was moved aside; if an account reports needing a login, log it in again.";
+
+    /// <summary>
+    /// The recovery warning for a file still sitting in the recovery directory,
+    /// waiting for a start or a refresh that can apply it. Distinct from the
+    /// sentence above because nothing moved anywhere: sending the operator to the
+    /// stale directory for a file that is not there is the sort of message this
+    /// catalogue exists to prevent.
+    /// </summary>
+    public static string RestoreKept() =>
+        "A recovery file could not be applied yet and was kept; if an account reports needing a login, log it in again.";
 
     private static string Seconds(TimeSpan span) =>
         Math.Max(0, (int)Math.Ceiling(span.TotalSeconds)).ToString(CultureInfo.InvariantCulture);

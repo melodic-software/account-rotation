@@ -67,23 +67,15 @@ internal static class RefreshEndpoints
     /// </summary>
     private static IResult Start(QuotaRefreshWorker worker, QuotaState state, TimeProvider timeProvider, RefreshRequest request)
     {
-        if (LockedFor(state, timeProvider.GetUtcNow()) is TimeSpan remaining)
+        DateTimeOffset now = timeProvider.GetUtcNow();
+        if (state.LockedUntil(now) is DateTimeOffset until)
         {
-            return Refused("RateLimited", RefreshMessages.RateLimited(remaining));
+            return Refused("RateLimited", RefreshMessages.RateLimited(until - now));
         }
 
         return worker.TryStart(request)
             ? Results.Json(new { started = true }, statusCode: StatusCodes.Status202Accepted)
             : Refused("RefreshInProgress", "A refresh is already running");
-    }
-
-    /// <summary>How long the standing lockout still has to run, or null when neither host has one.</summary>
-    private static TimeSpan? LockedFor(QuotaState state, DateTimeOffset now)
-    {
-        DateTimeOffset? until = new[] { state.UsageLockedUntil, state.TokenLockedUntil }
-            .Where(instant => instant > now)
-            .Max();
-        return until is DateTimeOffset instant ? instant - now : null;
     }
 
     /// <summary>

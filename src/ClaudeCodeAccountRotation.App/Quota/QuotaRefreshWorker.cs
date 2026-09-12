@@ -63,6 +63,19 @@ internal sealed partial class QuotaRefreshWorker : BackgroundService
         return false;
     }
 
+    /// <summary>
+    /// Closes the channel to new work before the base class cancels the loop.
+    /// Without it, a Refresh all that arrives during shutdown claims the run,
+    /// writes into a channel nothing will read again, and is answered 202 for a
+    /// pass that never runs; with it the write fails, the claim is given back,
+    /// and the route says a refresh could not be started.
+    /// </summary>
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        _requests.Writer.TryComplete();
+        await base.StopAsync(cancellationToken);
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
@@ -74,6 +87,14 @@ internal sealed partial class QuotaRefreshWorker : BackgroundService
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
+                return;
+            }
+            catch (ChannelClosedException)
+            {
+                // Shutdown completed the writer and drained the channel. An
+                // ordinary ending, and a different exception from the cancelled
+                // one above: the reader throws this one when there is nothing
+                // left to read and nothing left to come.
                 return;
             }
 
@@ -89,7 +110,8 @@ internal sealed partial class QuotaRefreshWorker : BackgroundService
                 // a defect rather than a foreseen path. It must still not end the
                 // service: the alternative is a tool whose Refresh all button
                 // silently does nothing until the next restart.
-                LogPassFailed(exception.ToString());
+                LogPassFailed(exception.GetType().Name);
+                LogPassFailedDetail(exception);
             }
             finally
             {
@@ -98,6 +120,9 @@ internal sealed partial class QuotaRefreshWorker : BackgroundService
         }
     }
 
-    [LoggerMessage(Level = LogLevel.Error, Message = "refresh pass ended in an unhandled failure: {Failure}")]
+    [LoggerMessage(Level = LogLevel.Warning, Message = "refresh pass ended in an unhandled failure ({Failure})")]
     private partial void LogPassFailed(string failure);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "refresh pass ended in an unhandled failure")]
+    private partial void LogPassFailedDetail(Exception exception);
 }

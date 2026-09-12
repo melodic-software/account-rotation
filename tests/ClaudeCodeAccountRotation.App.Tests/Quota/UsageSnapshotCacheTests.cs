@@ -30,8 +30,8 @@ public sealed class UsageSnapshotCacheTests
         using CacheFixture fixture = new();
         DateTimeOffset capturedA = _now.AddHours(-3);
         DateTimeOffset capturedB = _now.AddMinutes(-20);
-        await fixture.Cache.SaveAsync(Email("a@example.com"), Snapshot("a@example.com", capturedA, Session(43)), Token);
-        await fixture.Cache.SaveAsync(Email("b@example.com"), Snapshot("b@example.com", capturedB, Scoped(61)), Token);
+        await fixture.Cache.SaveAsync(Email("a@example.com"), Snapshot("a@example.com", capturedA, Session(43)));
+        await fixture.Cache.SaveAsync(Email("b@example.com"), Snapshot("b@example.com", capturedB, Scoped(61)));
 
         IReadOnlyList<UsageSnapshot> loaded = await fixture.Cache.LoadAsync(Token);
 
@@ -82,9 +82,9 @@ public sealed class UsageSnapshotCacheTests
         // point of the file: a save that wrote only its own account would leave
         // the other nine cards unknown after a restart.
         using CacheFixture fixture = new();
-        await fixture.Cache.SaveAsync(Email("a@example.com"), Snapshot("a@example.com", _now.AddHours(-3), Session(43)), Token);
-        await fixture.Cache.SaveAsync(Email("b@example.com"), Snapshot("b@example.com", _now.AddHours(-2), Session(12)), Token);
-        await fixture.Cache.SaveAsync(Email("a@example.com"), Snapshot("a@example.com", _now, Session(77)), Token);
+        await fixture.Cache.SaveAsync(Email("a@example.com"), Snapshot("a@example.com", _now.AddHours(-3), Session(43)));
+        await fixture.Cache.SaveAsync(Email("b@example.com"), Snapshot("b@example.com", _now.AddHours(-2), Session(12)));
+        await fixture.Cache.SaveAsync(Email("a@example.com"), Snapshot("a@example.com", _now, Session(77)));
 
         IReadOnlyList<UsageSnapshot> loaded = await fixture.Cache.LoadAsync(Token);
 
@@ -155,23 +155,6 @@ public sealed class UsageSnapshotCacheTests
         cached.ShouldContain("43");
         cached.ShouldNotContain("refresh-");
         cached.ShouldNotContain("access-");
-    }
-
-    [Fact]
-    public async Task ASaveRunsToCompletionUnderAPassTokenThatHasBeenCancelled()
-    {
-        // The pass hands its stopping token down, and a host shutting down between
-        // a read and this write must not throw the read away: it has already been
-        // paid for out of the rate window, and the account's outcome is recorded
-        // after the save returns. The write-back the engine does under the
-        // mutation gate ignores cancellation for the same reason.
-        using CacheFixture fixture = new();
-        using CancellationTokenSource stopping = new();
-        await stopping.CancelAsync();
-
-        await fixture.Cache.SaveAsync(Email("a@example.com"), Snapshot("a@example.com", _now, Session(43)), stopping.Token);
-
-        (await fixture.Cache.LoadAsync(Token)).Single().Limits.Single().Percent.ShouldBe(43);
     }
 
     private static AccountEmail Email(string value) => AccountEmail.Parse(value).Value;

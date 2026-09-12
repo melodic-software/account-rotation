@@ -31,6 +31,9 @@ internal sealed class QuotaState
     private readonly Dictionary<string, string> _recoveryWarnings =
         new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
 
+    private readonly Dictionary<string, DateTimeOffset> _loginRenewals =
+        new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+
     private DateTimeOffset? _usageLockedUntil;
     private DateTimeOffset? _tokenLockedUntil;
     private bool _inProgress;
@@ -132,6 +135,22 @@ internal sealed class QuotaState
         }
     }
 
+    /// <summary>
+    /// The instant both hosts are clear again, or null when neither lockout is
+    /// still standing at <paramref name="now"/>. One method rather than the same
+    /// "later of the two" expression wherever it is asked: the page, the routes
+    /// and the pass itself all have to agree on whether this tool is holding off,
+    /// and three hand-rolled copies are three chances to drift apart.
+    /// </summary>
+    public DateTimeOffset? LockedUntil(DateTimeOffset now)
+    {
+        lock (_mutex)
+        {
+            DateTimeOffset? later = _usageLockedUntil > _tokenLockedUntil ? _usageLockedUntil : _tokenLockedUntil ?? _usageLockedUntil;
+            return later > now ? later : null;
+        }
+    }
+
     /// <summary>Claims the right to run one pass, or refuses because one is already running.</summary>
     public bool TryBeginRun()
     {
@@ -224,6 +243,29 @@ internal sealed class QuotaState
         lock (_mutex)
         {
             _recoveryWarnings.Remove(folder);
+        }
+    }
+
+    /// <summary>
+    /// When this folder's login was last renewed by a pass, or null when no pass
+    /// has renewed it. The token response is allowed to omit the new login
+    /// expiry, and the pair then keeps the expiry it already had, so the window
+    /// that chose the account stays open and every later pass would choose it
+    /// again. This is the only record that the request was already made.
+    /// </summary>
+    public DateTimeOffset? LoginRenewedAt(string folder)
+    {
+        lock (_mutex)
+        {
+            return _loginRenewals.TryGetValue(folder, out DateTimeOffset renewed) ? renewed : null;
+        }
+    }
+
+    public void RecordLoginRenewal(string folder, DateTimeOffset renewedAt)
+    {
+        lock (_mutex)
+        {
+            _loginRenewals[folder] = renewedAt;
         }
     }
 }

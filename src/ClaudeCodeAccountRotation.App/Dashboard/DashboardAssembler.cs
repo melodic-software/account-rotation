@@ -273,9 +273,7 @@ internal sealed class DashboardAssembler(
     /// <summary>The pass as a whole: running or not, the lockout that is still standing, and what the last one came to.</summary>
     private RefreshView Pass(DateTimeOffset capturedAt)
     {
-        DateTimeOffset? lockedUntil = new[] { quota.UsageLockedUntil, quota.TokenLockedUntil }
-            .Where(instant => instant > capturedAt)
-            .Max();
+        DateTimeOffset? lockedUntil = quota.LockedUntil(capturedAt);
         List<string> counts = [.. (quota.LastPassSummary ?? new Dictionary<RefreshOutcomeKind, int>())
             .Where(static count => count.Value > 0)
             .OrderBy(static count => count.Key)

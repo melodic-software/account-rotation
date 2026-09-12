@@ -39,14 +39,14 @@ namespace ClaudeCodeAccountRotation.App.Quota;
 internal sealed partial class QuotaRefresh
 {
     /// <summary>
-    /// How long the refresh unit waits for the mutation gate. Not zero, which is
-    /// what production hands every other caller: the dashboard poll's identity
-    /// repair takes the gate with a zero wait every ten seconds, so a zero wait
-    /// here would skip accounts at random depending on which poll it collided
-    /// with. Two seconds outlasts a repair and still refuses a real switch
-    /// quickly.
+    /// How long a gated credential unit waits for the mutation gate. Not zero,
+    /// which is what production hands every other caller: the dashboard poll's
+    /// identity repair takes the gate with a zero wait every ten seconds, so a
+    /// zero wait here would skip accounts at random depending on which poll it
+    /// collided with. Two seconds outlasts a repair and still refuses a real
+    /// switch quickly.
     /// </summary>
-    private static readonly TimeSpan _gateWait = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan _defaultGateWait = TimeSpan.FromSeconds(2);
 
     /// <summary>
     /// What a 429 costs when the host declines to say. Spike 02 measured the
@@ -65,6 +65,17 @@ internal sealed partial class QuotaRefresh
     /// narrow enough that a paused account is otherwise left entirely alone.
     /// </summary>
     private static readonly TimeSpan _loginRenewalWindow = TimeSpan.FromDays(7);
+
+    /// <summary>
+    /// How long a renewed login is left alone before a pass will spend another
+    /// token request on it. The token response is allowed to omit the new login
+    /// expiry, and the pair then keeps the expiry it had, so the window above
+    /// stays open and every later pass would post again for the same account —
+    /// every ten seconds if the operator leaves Refresh all under their finger.
+    /// A day is far inside the week the window covers, so a renewal that really
+    /// did not take still gets six more chances before the login lapses.
+    /// </summary>
+    private static readonly TimeSpan _loginRenewalInterval = TimeSpan.FromDays(1);
 
     /// <summary>
     /// Three write-back attempts and the wait after each, jittered. The wait
@@ -91,6 +102,7 @@ internal sealed partial class QuotaRefresh
     private readonly TimeProvider _timeProvider;
     private readonly Func<TimeSpan, CancellationToken, Task> _pace;
     private readonly ILogger<QuotaRefresh> _logger;
+    private readonly TimeSpan _gateWait;
 
     public QuotaRefresh(
         ICredentialPairStore pairs,
@@ -108,7 +120,8 @@ internal sealed partial class QuotaRefresh
         RecoveryFiles recovery,
         TimeProvider timeProvider,
         Func<TimeSpan, CancellationToken, Task> pace,
-        ILogger<QuotaRefresh> logger)
+        ILogger<QuotaRefresh> logger,
+        TimeSpan? gateWait = null)
     {
         _pairs = pairs;
         _profiles = profiles;
@@ -126,6 +139,10 @@ internal sealed partial class QuotaRefresh
         _timeProvider = timeProvider;
         _pace = pace;
         _logger = logger;
+        // Defaulted rather than registered, so the composition root says nothing
+        // about it and a test can hold the gate against a pass without paying the
+        // production wait twice over.
+        _gateWait = gateWait ?? _defaultGateWait;
     }
 
     /// <summary>
@@ -170,11 +187,18 @@ internal sealed partial class QuotaRefresh
             // Building the candidate set reads four files written by other
             // processes. Anything unforeseen there ends the pass with what it has
             // rather than taking the hosted worker down.
-            LogPassFailed(exception.ToString());
+            LogPassFailed(exception.GetType().Name);
+            LogPassFailedDetail(exception);
         }
         finally
         {
-            _state.RecordPassSummary(summary);
+            // Only a full pass leaves a summary. A single card's refresh counts
+            // one account, and a header reading "last pass: 1 read" after it would
+            // say the other nine were never tried.
+            if (request.Account is null)
+            {
+                _state.RecordPassSummary(summary);
+            }
         }
     }
 
@@ -278,16 +302,17 @@ internal sealed partial class QuotaRefresh
         try
         {
             DateTimeOffset now = _timeProvider.GetUtcNow();
-            if (LockedUntil(now) is not null)
+            if (_state.LockedUntil(now) is not null)
             {
                 return new Turn(LockedOut());
             }
 
             if (!candidate.IsLive
                 && candidate.FolderPath is string stranded
-                && !await _recovery.RestoreAsync(stranded, stopping))
+                && _recovery.HasRecoveryFor(stranded)
+                && await RestoreUnderGateAsync(stranded) is RefreshOutcome blocked)
             {
-                return new Turn(Outcome(RefreshOutcomeKind.Stranded, RefreshMessages.Stranded));
+                return new Turn(blocked);
             }
 
             CredentialPair? pair = candidate.IsLive
@@ -327,7 +352,8 @@ internal sealed partial class QuotaRefresh
         {
             // One account's unforeseen failure costs that account its turn and
             // nothing more; the next nine still get read.
-            LogTurnFailed(candidate.Email.Value, exception.ToString());
+            LogTurnFailed(candidate.Email.Value, exception.GetType().Name);
+            LogTurnFailedDetail(candidate.Email.Value, exception);
             return new Turn(Outcome(RefreshOutcomeKind.ReadFailed, RefreshMessages.ReadFailedTransport));
         }
     }
@@ -372,7 +398,7 @@ internal sealed partial class QuotaRefresh
             limits.Value,
             UsageResponseParser.ParseExtraUsage(body.RootElement));
         _state.RecordSnapshot(snapshot);
-        await _cache.SaveAsync(candidate.Email, snapshot, stopping);
+        await _cache.SaveAsync(candidate.Email, snapshot);
         return new Turn(Outcome(RefreshOutcomeKind.Read, RefreshMessages.Read), SentRead: true);
     }
 
@@ -440,9 +466,10 @@ internal sealed partial class QuotaRefresh
     /// pair is already dead. Inside the last week of that login the pass spends
     /// the gated refresh unit on it and nothing else — no usage read, and no
     /// reservation out of a read budget that belongs to the accounts still in the
-    /// rotation. Further out, or with no recorded login expiry, the account stays
-    /// what it was: skipped. A renewal that lands is a skip too, with the sentence
-    /// that says why the card still carries no numbers.
+    /// rotation. Further out, with no recorded login expiry, or within a day of
+    /// the last renewal, the account stays what it was: skipped. A renewal that
+    /// lands is a skip too, with the sentence that says why the card still
+    /// carries no numbers.
     /// </summary>
     private async Task<Turn> RenewPausedLoginAsync(Candidate candidate, CredentialPair pair, DateTimeOffset now)
     {
@@ -451,15 +478,72 @@ internal sealed partial class QuotaRefresh
             return new Turn(Outcome(RefreshOutcomeKind.Skipped, RefreshMessages.Paused));
         }
 
+        if (_state.LoginRenewedAt(candidate.FolderPath!) is DateTimeOffset renewed && now - renewed < _loginRenewalInterval)
+        {
+            return new Turn(Outcome(RefreshOutcomeKind.Skipped, RefreshMessages.PausedLoginRenewedRecently));
+        }
+
         GatedRefresh refreshed = await RefreshUnderGateAsync(candidate.FolderPath!, pair);
         // Every refusal the unit makes before it posts is a skip, and nothing it
         // decides after the endpoint has answered is one, so the kind is what says
-        // whether this turn owes the next candidate the spacing.
+        // whether this turn owes the next candidate the spacing — and whether a
+        // request left the machine, which is what the interval above counts.
         bool posted = refreshed.Outcome is null or { Kind: not RefreshOutcomeKind.Skipped };
+        if (posted)
+        {
+            _state.RecordLoginRenewal(candidate.FolderPath!, now);
+        }
+
         return new Turn(
             refreshed.Outcome ?? Outcome(RefreshOutcomeKind.Skipped, RefreshMessages.PausedLoginRenewed),
             refreshed.EndsPass,
             SentRead: posted);
+    }
+
+    /// <summary>
+    /// The restore of a stranded folder, under the same gate and the same login
+    /// check as the write-back that stranded it. A restore rewrites a credential
+    /// file by compare-and-swap, so it is a credential mutation like any other:
+    /// outside the gate it could land between a switch's journal write and its
+    /// unpark, and against a login in flight it would rewrite the folder the
+    /// child is about to be judged on by digest. The gate is taken here rather
+    /// than inside <see cref="RecoveryFiles"/> because the removal route already
+    /// holds it when it restores, and this gate is not re-entrant.
+    /// </summary>
+    /// <returns>
+    /// Null when the folder is no longer stranded and the turn may go on, or the
+    /// outcome that stopped it. The file is kept in every refusal.
+    /// </returns>
+    private async Task<RefreshOutcome?> RestoreUnderGateAsync(string folder)
+    {
+        IDisposable? permit = null;
+        try
+        {
+            try
+            {
+                permit = await _gate.AcquireAsync(_gateWait, CancellationToken.None);
+            }
+            catch (TimeoutException)
+            {
+                return Outcome(RefreshOutcomeKind.Skipped, RefreshMessages.MutationInProgress);
+            }
+
+            if (_logins.IsRunningAgainst(folder))
+            {
+                return Outcome(RefreshOutcomeKind.Skipped, RefreshMessages.LoginInProgress);
+            }
+
+            // Under CancellationToken.None, the gated write-back's rule: a restore
+            // abandoned halfway is the same lost lineage whichever half of it the
+            // host's shutdown lands in.
+            return await _recovery.RestoreAsync(folder, CancellationToken.None)
+                ? null
+                : Outcome(RefreshOutcomeKind.Stranded, RefreshMessages.Stranded);
+        }
+        finally
+        {
+            permit?.Dispose();
+        }
     }
 
     /// <summary>
@@ -504,7 +588,25 @@ internal sealed partial class QuotaRefresh
             Result<RefreshedTokens, UsageReadFailure> refreshed = await _tokens().RefreshAsync(current.RefreshToken, CancellationToken.None);
             if (refreshed.IsSuccess)
             {
-                return await WriteBackAsync(folder, current, refreshed.Value);
+                CredentialPair rotated = Rotate(current, refreshed.Value);
+                try
+                {
+                    return await WriteBackAsync(folder, current, rotated);
+                }
+#pragma warning disable CA1031 // Do not catch general exception types
+                catch (Exception exception)
+#pragma warning restore CA1031
+                {
+                    // Past this point the old refresh token is already dead, so
+                    // every way out but the recovery directory loses the account.
+                    // The retry loop names the failures it expects; this catches
+                    // the ones nobody thought of, because the alternative is the
+                    // turn's own catch-all dropping the only working lineage.
+                    string name = FolderName(folder);
+                    LogWriteBackFailed(name, exception.GetType().Name);
+                    LogWriteBackFailedDetail(name, exception);
+                    return await StrandAsync(folder, current.Fingerprint, rotated);
+                }
             }
 
             if (refreshed.Error.Kind == UsageReadFailureKind.RateLimited)
@@ -535,14 +637,13 @@ internal sealed partial class QuotaRefresh
     /// both will say the same thing in a second — so it strands at once rather
     /// than spending the retry budget on a settled answer. An exception is the
     /// transient case: a file locked by a virus scanner, a folder momentarily
-    /// unwritable.
+    /// unwritable, a credential file read back mid-write by whoever is writing it.
     /// </summary>
-    private async Task<GatedRefresh> WriteBackAsync(string folder, CredentialPair current, RefreshedTokens tokens)
+    private async Task<GatedRefresh> WriteBackAsync(string folder, CredentialPair current, CredentialPair rotated)
     {
-        CredentialPair rotated = Rotate(current, tokens);
         for (int attempt = 1; attempt <= _writeBackBackoff.Length; attempt++)
         {
-            string transient;
+            Exception transient;
             try
             {
                 Result<Unit, string> written = await _pairs.WriteParkedAsync(folder, rotated, current.Fingerprint, CancellationToken.None);
@@ -567,20 +668,18 @@ internal sealed partial class QuotaRefresh
                 LogWriteBackRefused(FolderName(folder), written.Error);
                 return await StrandAsync(folder, current.Fingerprint, rotated);
             }
-            catch (IOException exception)
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException or JsonException)
             {
-                transient = exception.Message;
-            }
-            catch (UnauthorizedAccessException exception)
-            {
-                transient = exception.Message;
-            }
-            catch (InvalidDataException exception)
-            {
-                transient = exception.Message;
+                // JsonException among them: the store re-reads the folder's file
+                // to compare fingerprints, and a file caught mid-write parses as
+                // nothing at all. That is the same momentary state as a locked
+                // file and deserves the same retry, not a strand.
+                transient = exception;
             }
 
-            LogWriteBackRetried(FolderName(folder), attempt, transient);
+            string name = FolderName(folder);
+            LogWriteBackRetried(name, attempt, transient.GetType().Name);
+            LogWriteBackRetriedDetail(name, attempt, transient);
             await _pace(Jittered(_writeBackBackoff[attempt - 1]), CancellationToken.None);
         }
 
@@ -645,20 +744,11 @@ internal sealed partial class QuotaRefresh
     private GatedRefresh Refused(RefreshOutcomeKind kind, string message) =>
         new(Outcome(kind, message), Pair: null);
 
-    /// <summary>The instant both hosts are clear again, or null when neither is locked out.</summary>
-    private DateTimeOffset? LockedUntil(DateTimeOffset now)
-    {
-        DateTimeOffset? usage = _state.UsageLockedUntil;
-        DateTimeOffset? token = _state.TokenLockedUntil;
-        DateTimeOffset? later = usage is null || token > usage ? token ?? usage : usage;
-        return later > now ? later : null;
-    }
-
     /// <summary>What every candidate after a 429 reports: rate limited, with the same countdown, and nothing sent.</summary>
     private RefreshOutcome LockedOut()
     {
         DateTimeOffset now = _timeProvider.GetUtcNow();
-        DateTimeOffset until = LockedUntil(now) ?? now;
+        DateTimeOffset until = _state.LockedUntil(now) ?? now;
         return Outcome(RefreshOutcomeKind.RateLimited, RefreshMessages.RateLimited(until - now), until);
     }
 
@@ -666,7 +756,10 @@ internal sealed partial class QuotaRefresh
     {
         DateTimeOffset now = _timeProvider.GetUtcNow();
         TimeSpan? wait = _budget.GapRemaining(account) ?? _budget.LockedOutFor(account);
-        string message = _state.LatestFor(account) is { Source: QuotaSource.OnDemandRefresh } latest
+        // The same two sources LastReadAt counts, for the same reason: a figure
+        // loaded from the cache file was read from the endpoint too, just by the
+        // run before this one, and "read N s ago" is exactly as true of it.
+        string message = _state.LatestFor(account) is { Source: QuotaSource.OnDemandRefresh or QuotaSource.Cached } latest
             ? RefreshMessages.ReadRecently(now - latest.CapturedAt)
             : RefreshMessages.BudgetSpent;
         return Outcome(RefreshOutcomeKind.BudgetRefused, message, wait is TimeSpan remaining ? now + remaining : null);
@@ -701,11 +794,21 @@ internal sealed partial class QuotaRefresh
     /// <summary>Either a rotated pair to read with, or the outcome that stopped the unit.</summary>
     private sealed record GatedRefresh(RefreshOutcome? Outcome, CredentialPair? Pair, bool EndsPass = false);
 
-    [LoggerMessage(Level = LogLevel.Error, Message = "the refresh pass could not be built: {Failure}")]
+    // Every failure line comes in a pair: the type and the curated reason at a
+    // level the operator sees, and the exception itself at Debug. A stack trace
+    // or a file-system message quotes paths, and these lines are read off a
+    // console the operator leaves open beside ten real accounts.
+    [LoggerMessage(Level = LogLevel.Warning, Message = "the refresh pass could not be built ({Failure})")]
     private partial void LogPassFailed(string failure);
 
-    [LoggerMessage(Level = LogLevel.Error, Message = "the refresh of {Account} failed unexpectedly: {Failure}")]
+    [LoggerMessage(Level = LogLevel.Debug, Message = "the refresh pass could not be built")]
+    private partial void LogPassFailedDetail(Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "the refresh of {Account} failed unexpectedly ({Failure})")]
     private partial void LogTurnFailed(string account, string failure);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "the refresh of {Account} failed unexpectedly")]
+    private partial void LogTurnFailedDetail(string account, Exception exception);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "rotated the credential pair for {Folder} ({Previous} to {Rotated})")]
     private partial void LogRotated(string folder, string previous, string rotated);
@@ -713,8 +816,17 @@ internal sealed partial class QuotaRefresh
     [LoggerMessage(Level = LogLevel.Warning, Message = "the write-back for {Folder} was refused by the store: {Reason}")]
     private partial void LogWriteBackRefused(string folder, string reason);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "write-back attempt {Attempt} for {Folder} failed: {Reason}")]
-    private partial void LogWriteBackRetried(string folder, int attempt, string reason);
+    [LoggerMessage(Level = LogLevel.Warning, Message = "write-back attempt {Attempt} for {Folder} failed ({Failure})")]
+    private partial void LogWriteBackRetried(string folder, int attempt, string failure);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "write-back attempt {Attempt} for {Folder} failed")]
+    private partial void LogWriteBackRetriedDetail(string folder, int attempt, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "the write-back for {Folder} failed unexpectedly and the rotated pair is being stranded ({Failure})")]
+    private partial void LogWriteBackFailed(string folder, string failure);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "the write-back for {Folder} failed unexpectedly")]
+    private partial void LogWriteBackFailedDetail(string folder, Exception exception);
 
     [LoggerMessage(Level = LogLevel.Error, Message = "the rotated credential pair for {Folder} is lost (replacing {Previous}, rotated to {Rotated}); log that account in again")]
     private partial void LogLost(string folder, string previous, string rotated);

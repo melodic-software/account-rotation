@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Accounts;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
 using ClaudeCodeAccountRotation.App.Dashboard;
+using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.App.Security;
 using ClaudeCodeAccountRotation.App.Switching;
 using ClaudeCodeAccountRotation.Core;
@@ -33,7 +34,9 @@ namespace ClaudeCodeAccountRotation.App.Endpoints;
 /// rather than silently leaving a live token behind. <c>?logout=false</c> is
 /// the operator's deliberate override: the folder goes and the response says
 /// the token was not revoked. A folder that holds no pair skips the logout
-/// entirely; there is nothing to revoke.
+/// entirely; there is nothing to revoke. A folder whose pair is stranded in
+/// recovery is put back first, so the revocation reaches the lineage that is
+/// actually alive.
 /// </para>
 /// </summary>
 internal static class RosterEndpoints
@@ -162,6 +165,7 @@ internal static class RosterEndpoints
             IClaudeCliLogout cli,
             ILoginSessionRunner logins,
             CredentialMutationGate gate,
+            RecoveryFiles recovery,
             SwitchOptions options,
             CancellationToken cancellationToken) =>
         {
@@ -214,6 +218,22 @@ internal static class RosterEndpoints
                 // switch stops consulting it past its journal write: a browser that
                 // navigates away must not leave a revoked login beside a kept folder.
                 CancellationToken committed = CancellationToken.None;
+
+                // A stranded folder holds the pair a rotation replaced while the
+                // working lineage waits in the recovery directory. Revoking what the
+                // folder holds would kill the dead pair and leave the live one valid
+                // for the rest of its login, in a file belonging to an account the
+                // roster no longer names. So the restore runs first, under the gate
+                // this handler already holds, and the logout revokes what the account
+                // really has. A restore that cannot apply refuses the removal
+                // outright rather than choosing which lineage to leave behind.
+                if (recovery.HasRecoveryFor(folder) && !await recovery.RestoreAsync(folder, committed))
+                {
+                    return Refused(
+                        "StrandedInRecovery",
+                        "That account's rotated credentials are held in the recovery directory and could not be put back, so a removal now would revoke the wrong login. Resolve the recovery file first: refresh that card, or restart the tool, then remove the account.");
+                }
+
                 bool hasPair = File.Exists(Path.Combine(folder, FileSystemCredentialPairStore.FileName));
                 bool revoke = logout ?? true;
                 bool revoked = false;
