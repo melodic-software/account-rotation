@@ -183,7 +183,7 @@ Pre-flight consumer check for the `/api/dashboard` contract change (`quota`/`quo
 `DashboardAssemblerTests.cs`, and (the word alone) `index.html`'s tagline. `app.js` reads neither
 field. Both consumers move in Phase 1.
 
-### Phase 1: The refresh engine, the two routes, the per-bucket view, and the page [TODO]
+### Phase 1: The refresh engine, the two routes, the per-bucket view, and the page [DONE]
 
 Work items, in order. TDD: each production item below is preceded by its red test. Baseline on
 `main` at `ed25bbb`: 343 tests (1 skipped); `grep -c innerHTML app.js` prints 2.
@@ -414,6 +414,15 @@ Work items, in order. TDD: each production item below is preceded by its red tes
 - `grep -c "IsRunningAgainst" src/ClaudeCodeAccountRotation.App/Quota/QuotaRefresh.cs` ≥ 1; `grep -c "CancellationToken.None" src/ClaudeCodeAccountRotation.App/Quota/QuotaRefresh.cs` ≥ 1; `grep -c "TargetStrandedInRecovery" src/ClaudeCodeAccountRotation.Core/Switching/SwitchPlanner.cs` ≥ 1.
 - `grep -c "account.usage\|account.refresh" src/ClaudeCodeAccountRotation.App/wwwroot/app.js` ≥ 2; `grep -c "innerHTML" src/ClaudeCodeAccountRotation.App/wwwroot/app.js` prints `2`.
 - `grep -c "recovery" tests/acceptance/check-single-holder.sh` ≥ 1; `shellcheck tests/acceptance/*.sh` clean.
+
+**Done (2026-09-12):** four sub-briefs, nine commits `f5e8288` to `60f7e1c`; `dotnet test -c
+Release` went from 343 to 399 (1 skipped) with build, format, shellcheck, markdownlint, typos,
+and the machine-path check clean. A fresh-context phase verifier passed every sanity check and
+acceptance criterion and killed 15 of 15 mutations against the named tests. Untested by design:
+the 2-second gate wait and its timeout branch, the window-cap refusal sentence, and the page
+(no JavaScript harness; verified by reading and by a throwaway instance's payload). Flagged for
+the security lane: the engine's failure log lines carry `exception.ToString()`, which can hold a
+path; card messages never do. Deviations from the plan text are in `DEVIATIONS.md`.
 
 ### Phase 2: The snapshot cache file [TODO]
 
