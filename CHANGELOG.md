@@ -47,9 +47,9 @@ All notable changes to this project are documented in this file. The format foll
   has ever carried says `unknown` rather than showing a zero it does not know, and a bucket whose
   window has reset since it was captured says so instead of showing a figure that now measures
   nothing: a card that silently shows a stale number is worse than one that admits it is stale.
-  `Refresh all` in the header reads every account that has credentials and is not paused, one read
-  each, the one read longest ago first; a card's own `Refresh` reads that one account. Both are
-  routes in the same-origin mutation group, `POST /api/refresh` and
+  `Refresh all` in the header reads every account that has credentials (a paused one is only
+  renewed, never read), one read each, the one read longest ago first; a card's own `Refresh` reads
+  that one account. Both are routes in the same-origin mutation group, `POST /api/refresh` and
   `POST /api/accounts/{email}/refresh`, and both answer at once and leave the pass to a hosted
   background worker, because a browser navigating away must never interrupt a credential operation;
   the page's ten-second poll is what shows each card land. Reads are paced and budgeted, and a 429

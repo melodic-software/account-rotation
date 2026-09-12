@@ -206,6 +206,30 @@ public sealed class QuotaRefreshTests
     }
 
     [Fact]
+    public async Task AnUnexpectedWriteBackFailureStrandsAtOnce()
+    {
+        // The retry loop names the failures it expects. This is one nobody
+        // thought of, and past the endpoint's answer the old refresh token is
+        // already dead, so the only alternative to parking the rotated pair is
+        // the turn's catch-all dropping the account's one living lineage. No
+        // retry: nothing about an unforeseen failure says a second attempt is
+        // any more likely to land than the first.
+        using RefreshHarness harness = new();
+        string folder = await harness.ParkAsync("a@example.com", "refresh-a", harness.Expired, Token);
+        harness.Store.ThrowOnWriteWith = new InvalidOperationException("the store faulted in a way the retry loop does not name");
+        harness.Tokens.Answers.Enqueue(ScriptedTokens.Rotated("a2", harness.Valid, harness.Clock.GetUtcNow().AddDays(28)));
+
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        harness.Store.WriteAttempts.ShouldBe(1);
+        harness.Waits.Requested.ShouldBeEmpty();
+        harness.OutcomeFor("a@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.Stranded);
+        harness.Recovery.HasRecoveryFor(folder).ShouldBeTrue();
+        CredentialPair rescued = CredentialPair.FromJson((await RecoveryEnvelopeAsync(harness, "a@example.com"))["pair"]!.AsObject()).Value;
+        rescued.Fingerprint.ShouldBe(RefreshTokenFingerprint.FromRefreshToken("refresh-a2"));
+    }
+
+    [Fact]
     public async Task AWriteBackRefusedByTheStoreStrandsWithoutARetry()
     {
         using RefreshHarness harness = new();
@@ -666,6 +690,31 @@ public sealed class QuotaRefreshTests
         RefreshOutcome outcome = harness.OutcomeFor("a@example.com")!;
         outcome.Kind.ShouldBe(RefreshOutcomeKind.ReadFailed);
         outcome.Message.ShouldBe(RefreshMessages.ReadFailedTransport);
+    }
+
+    [Fact]
+    public async Task ASingleAccountRefreshLeavesTheLastPassSummaryAlone()
+    {
+        // The summary is the header's one line about the roster as a whole, so
+        // only a pass over the roster may write it. A single card's Refresh
+        // counts one account, and "last pass: 1 read" under nine cards it never
+        // looked at says the other nine were tried and came to nothing.
+        using RefreshHarness harness = new();
+        await harness.ParkAsync("a@example.com", "refresh-a", harness.Valid, Token);
+        await harness.ParkAsync("b@example.com", "refresh-b", harness.Valid, Token);
+        harness.Usage.AnswerAt = _ => ScriptedUsage.Ok();
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+        IReadOnlyDictionary<RefreshOutcomeKind, int> afterThePass = harness.State.LastPassSummary!;
+        afterThePass[RefreshOutcomeKind.Read].ShouldBe(2);
+
+        harness.Clock.Advance(TimeSpan.FromMinutes(2));
+        await harness.Engine.RunAsync(RefreshRequest.One(RefreshHarness.Email("a@example.com")), Token);
+
+        // The single read really happened, so this is about what it recorded and
+        // not about a request that did nothing.
+        harness.Usage.Calls.ShouldBe(3);
+        harness.OutcomeFor("a@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.Read);
+        harness.State.LastPassSummary.ShouldBeSameAs(afterThePass);
     }
 
     [Fact]
