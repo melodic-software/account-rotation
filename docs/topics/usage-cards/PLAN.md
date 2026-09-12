@@ -203,9 +203,10 @@ Work items, in order. TDD: each production item below is preceded by its red tes
      ordinal e-mail. Tests: `RefreshOrderTests` (never-read first; oldest next; tie order).
    - `RefreshBudget.GapRemaining(AccountEmail)`: the time until the 60-second gap since the last
      successful read has passed, `null` when no gap applies. Test in `RefreshBudgetTests`.
-   - `SwitchRefusal.TargetStrandedInRecovery` and `SwitchPlanningInput.TargetHasRecoveryFile`;
-     `SwitchPlanner.Plan` refuses when it is set, before the login-expiry check. Test in
-     `SwitchPlannerTests`.
+   - `SwitchRefusal.TargetStrandedInRecovery` and `SwitchPlanningInput.TargetHasRecoveryFile`
+     (a trailing positional parameter defaulting to `false`, so the two existing construction
+     sites compile unchanged); `SwitchPlanner.Plan` refuses when it is set, before the
+     login-expiry check. Test in `SwitchPlannerTests`.
 2. Engine, new folder `src/ClaudeCodeAccountRotation.App/Quota/`:
    - `RefreshOutcome(RefreshOutcomeKind Kind, string Message, DateTimeOffset? RetryAt,
      DateTimeOffset RecordedAt)`: flat, the codebase's result shape. `RefreshOutcomeKind`:
@@ -215,8 +216,12 @@ Work items, in order. TDD: each production item below is preceded by its red tes
      paths).
    - `QuotaState` (singleton, one `Lock`): `Latest` per account, `LastOutcome` per account,
      `UsageLockedUntil`, `TokenLockedUntil`, `InProgress`, `LastPassSummary` (counts by kind),
-     `Warnings` (recovery restore notes, read and cleared by the assembler); `Task CurrentRun` for
-     the tests to await (the `FinishedAsync` precedent). No token field on any member.
+     `RecoveryWarnings` keyed by folder (set by a restore that could not apply, removed when the
+     file is resolved; the `DashboardState.LastReconciliation` shape, not a drained queue); and a
+     `TaskCompletionSource` created by `TryStart` under the lock and completed by the worker in
+     `finally`, exposed as `Task CurrentRun` for the tests to await (the `FinishedAsync`
+     precedent; creating it at start closes the race between the 202 and the worker's pickup). No
+     token field on any member.
    - `RefreshRequest` (`All` or `One(AccountEmail)`) and `QuotaRefreshWorker : BackgroundService`
      on a bounded `Channel<RefreshRequest>` of capacity 1 (the `StateFileWatcher` shape):
      `TryStart(request)` sets `InProgress` and writes the channel, false when a run is in flight;
@@ -240,11 +245,14 @@ Work items, in order. TDD: each production item below is preceded by its red tes
        tee does not count); a lockout, a skip, or a budget refusal never advances it.
      - Per account, in this order: `stopping` requested → stop; `UsageLockedUntil` or
        `TokenLockedUntil` in the future → `RateLimited` with that instant, no request; a stranded
-       folder → try `RecoveryFiles.RestoreAsync(folder)` first (below); a parked pair whose
+       folder → try `RecoveryFiles.RestoreAsync(folder)` first (below); the live pair with
+       `AccessTokenExpiresAt <= now` → `SessionWillRefresh`, no request; a parked pair whose
        `AccessTokenExpiresAt <= now` → the gated refresh unit; then `budget.TryReserve`
        (false → `BudgetRefused` with `GapRemaining ?? LockedOutFor`, no request); GET through a
-       fresh client, disposing the `JsonDocument`; 401 on a parked pair → `budget.RecordUnauthorized`,
-       the gated unit, one retry GET on a new reservation-free read; 401 on the live pair →
+       fresh client, disposing the `JsonDocument`; 401 on a parked pair → `budget.RecordUnauthorized`
+       (the refund that lets the retry ride the original reservation), the gated unit, then one
+       retry GET through `TryReserve` again so a second 401 is accounted the way the budget's own
+       rule says; 401 on the live pair →
        `SessionWillRefresh`; 429 → `budget.RecordLockout`, `UsageLockedUntil = now + (RetryAfter is
        null or zero ? 300 s : RetryAfter)`, this and every later candidate `RateLimited`, the pass
        ends; 200 → `UsageResponseParser`, `UsageSnapshot` with `Source = OnDemandRefresh` into
@@ -280,8 +288,14 @@ Work items, in order. TDD: each production item below is preceded by its red tes
      a fingerprint mismatch moves it to `<appdata>/recovery/stale/` and records a warning; an absent
      parked pair or an exception keeps the file and records a warning naming the account and "log
      in again"; a malformed envelope is moved to `stale/` and warned. Warnings go to
-     `QuotaState.Warnings`. `RestoreAllAsync` is called from `StartupReconciliation.StartAsync`
-     after `ReconcileAsync`, wrapped so nothing it does can fail startup.
+     `QuotaState.RecoveryWarnings` keyed by folder and are cleared when that folder's file is
+     resolved. `RestoreAllAsync` is called from `StartupReconciliation.StartAsync` after
+     `ReconcileAsync`, wrapped so nothing it does can fail startup.
+   - `AppComposition` sets `HostOptions.ShutdownTimeout` explicitly, with a comment naming the
+     bound it covers: one gated unit in the worst case (2 s gate wait, a 20 s POST, three write
+     attempts each wrapping `AtomicBytesFile`'s 2 s transient retry, 1.75 s of pacer) is about
+     30 s, so the timeout is 45 s. A kill mid-write leaves a credential-shaped temp the startup
+     sweep quarantines rather than deletes, so the pair is recoverable by hand, not lost.
    - `LiveDirectorySwitch`: `SwitchPlanningInput.TargetHasRecoveryFile =
      recovery.HasRecoveryFor(targetFolder)` computed under the gate; `SwitchEndpoints.Describe`
      gains the refusal's message.
@@ -313,7 +327,8 @@ Work items, in order. TDD: each production item below is preceded by its red tes
      newest of the sources used, and a row whose source differs carries its own. `Refresh` comes
      from `QuotaState.LastOutcome`, `stranded` when `RecoveryFiles.HasRecoveryFor(folder)`.
      `DashboardView` gains `RefreshView Refresh(bool InProgress, DateTimeOffset? LockedUntil,
-     string? Summary)`; `QuotaState.Warnings` are drained into `Warnings`.
+     string? Summary)`; `QuotaState.RecoveryWarnings` are appended to `Warnings` on every read
+     for as long as they stand.
    - `DashboardAssemblerTests`: the eight existing facts move to `usage.limits[0].percent`; new:
      never-read parked card has three `known false` rows, `usage.source null`, `refresh.state idle`;
      the live card keeps its Fable row from an older on-demand read when a newer tee write lacks
@@ -324,8 +339,8 @@ Work items, in order. TDD: each production item below is preceded by its red tes
    `AppComposition.MapRoutes` in a `SameOriginMutationFilter` group: `POST /api/refresh` → 202
    `{ started: true }`, 409 `RefreshInProgress` ("A refresh is already running") when
    `TryStart` is false, 409 `RateLimited` (message with the seconds) under either lockout;
-   `POST /api/accounts/{email}/refresh` → 400 bad e-mail, 404 when neither a parked profile nor a
-   roster entry names it, 409 as above, 202.
+   `POST /api/accounts/{email}/refresh` → 400 bad e-mail, 404 when it is neither the live account
+   nor a parked profile nor a roster entry, 409 as above, 202.
 5. Test harness, `tests/ClaudeCodeAccountRotation.App.Tests/`:
    - `RecordingHandler` gains `Enqueue(HttpResponseMessage)`; `AppFactory` gains `Outbound` (one
      shared `RecordingHandler`, empty by default so an unexpected outbound call throws) wired through
@@ -517,7 +532,7 @@ creates, and Phase 4 reads the result of all three. No parallel wave.
 
 | Phase | Surface | Basis |
 |---|---|---|
-| 1 | one implementer sub-agent, main session verifies | one coherent tracer bullet across four layers; splitting it would hand each worker half a contract |
+| 1 | four sequential implementer sub-briefs, each committed at green, main session verifies | one tracer bullet is too large for one worker's turn budget; the sub-briefs are (a) harness and Core additions, (b) engine, worker, recovery, and DI, (c) views, assembler, routes, and their tests, (d) page, acceptance script, and CHANGELOG |
 | 2 | sub-agent | bounded, file-disjoint from the page |
 | 3 | sub-agent | bounded |
 | 4 | main session | judgment and outward actions |
@@ -574,8 +589,9 @@ creates, and Phase 4 reads the result of all three. No parallel wave.
 
 ### Mechanical work
 
-- Commit boundaries: `docs(plan)` for this topic first; one `feat` commit per phase (Phase 4's
-  parent-plan edit rides the last one).
+- Commit boundaries: `docs(plan)` for this topic first; one `feat` commit per Phase 1 sub-brief
+  and per later phase (Phase 4's parent-plan edit rides the last one); the PR squash-merges, so
+  the intermediate commits cost nothing and a worker lost mid-brief costs one brief.
 - Verification checkpoints: each phase's sanity list; the Phase 4 gate list; a fresh-context phase
   verifier and the code and security review lanes before the PR.
 - Sequential; nothing to fall back from.
