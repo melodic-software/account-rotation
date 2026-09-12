@@ -15,8 +15,8 @@ All notable changes to this project are documented in this file. The format foll
   object with whether a pass is running, the lockout that is still standing, and one line on what
   the last pass came to. A card is merged per bucket across every source that has numbers for that
   account rather than letting the newest whole reading win, so a live session's statusline write can
-  no longer blank a scoped row an on-demand read found. Nothing outside this repository reads the
-  payload.
+  no longer blank a scoped row an on-demand read found. Nothing else in the repository read the old
+  fields.
 - Discovered browser profiles are listed in the order an operator reads them: `Default` first, then
   `Profile N` by the number, then any other directory name, within each browser. The browser's own
   `Local State` lists them in whatever order it wrote them, which is a deletion history (the directory

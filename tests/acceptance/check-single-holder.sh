@@ -93,6 +93,9 @@ declare -A holders=()
 duplicates=0
 unreadable=0
 for file in "${files[@]}"; do
+  # A failing fingerprint is the unreadable case counted just below, not a
+  # reason to stop, so the set -e suppression this condition causes is intended.
+  # shellcheck disable=SC2310
   if ! hash="$(fingerprint "$file")"; then
     echo "unreadable $file" >&2
     unreadable=$((unreadable + 1))
