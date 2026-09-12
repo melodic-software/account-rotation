@@ -87,6 +87,29 @@ public sealed class QuotaRefreshTests
     }
 
     [Fact]
+    public async Task AnUnauthorizedLiveReadDoesNotStartTheGapClock()
+    {
+        // The endpoint rejected the token rather than serving the read, so the
+        // reservation it took is refunded exactly as it is on the parked path.
+        // Without that refund the live account waits out the sixty-second gap for
+        // a read that never happened, which on the live card is the one account
+        // the operator is most likely to refresh twice in a row.
+        using RefreshHarness harness = new();
+        await harness.WriteLiveIdentityAsync("live@example.com", Token);
+        await harness.WriteLivePairAsync("refresh-live", harness.Valid, Token);
+        harness.Usage.Answers.Enqueue(ScriptedUsage.Failed(UsageReadFailureKind.Unauthorized));
+        harness.Usage.Answers.Enqueue(ScriptedUsage.Ok());
+
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+        harness.Clock.Advance(TimeSpan.FromSeconds(2));
+        await harness.Engine.RunAsync(RefreshRequest.All, Token);
+
+        harness.Usage.Calls.ShouldBe(2);
+        harness.Tokens.Calls.ShouldBe(0);
+        harness.OutcomeFor("live@example.com")!.Kind.ShouldBe(RefreshOutcomeKind.Read);
+    }
+
+    [Fact]
     public async Task AMissingPairUnderTheGateSendsNoTokenPost()
     {
         using RefreshHarness harness = new();

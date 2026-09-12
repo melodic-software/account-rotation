@@ -349,6 +349,11 @@ internal sealed partial class QuotaRefresh
             case UsageReadFailureKind.Unauthorized when candidate.IsLive:
                 // The running session owns the live lineage and renews it itself;
                 // this tool refreshing it would rotate the token underneath the CLI.
+                // The reservation is still refunded, exactly as it is on the parked
+                // path: the endpoint rejected the token rather than serving the
+                // read, so nothing should make the next pass wait out the gap for a
+                // read that never happened.
+                _budget.RecordUnauthorized(candidate.Email);
                 return new Turn(Outcome(RefreshOutcomeKind.SessionWillRefresh, RefreshMessages.SessionWillRefresh), SentRead: true);
 
             case UsageReadFailureKind.Unauthorized when !retried:

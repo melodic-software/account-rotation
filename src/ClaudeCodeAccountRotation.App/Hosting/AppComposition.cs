@@ -124,7 +124,12 @@ internal static class AppComposition
         services.AddHostedService<InstanceLockHolder>();
         services.AddHostedService<StartupReconciliation>();
         services.AddHostedService<StateFileWatcher>();
-        services.AddHostedService<QuotaRefreshWorker>();
+        // The worker is registered twice over one instance because the refresh
+        // routes call TryStart on it: AddHostedService alone registers it as an
+        // IHostedService and nothing else, so the route could not resolve the very
+        // object holding the channel its 202 writes to.
+        services.AddSingleton<QuotaRefreshWorker>();
+        services.AddHostedService(static provider => provider.GetRequiredService<QuotaRefreshWorker>());
         // A pass is a credential operation, not a request: the account in flight
         // must be allowed to finish or its rotated pair is stranded. The worst
         // case is one gated refresh unit — a 2 s wait for the mutation gate, a
@@ -162,6 +167,7 @@ internal static class AppComposition
         DashboardEndpoints.Map(app);
         SwitchEndpoints.Map(app);
         RosterEndpoints.Map(app);
+        RefreshEndpoints.Map(app);
         LoginEndpoints.Map(app);
     }
 

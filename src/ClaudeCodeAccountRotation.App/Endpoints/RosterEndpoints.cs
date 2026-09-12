@@ -97,7 +97,13 @@ internal static class RosterEndpoints
                 IsLive: false,
                 folder.HasCredentials,
                 folder.FolderPath,
-                Roster: DashboardAssembler.View(entry)));
+                // Nothing has read this account yet, and the card still carries the
+                // rows the page always shows: the three-row shape is the server's
+                // to keep, whichever route hands a card back.
+                UsageView.Unread,
+                UsageNote: null,
+                RefreshStateView.Idle,
+                DashboardAssembler.View(entry)));
         });
 
         mutations.MapPatch("/accounts/{email}", static async (
@@ -288,7 +294,12 @@ internal static class RosterEndpoints
                 IsLive: true,
                 HasCredentials: true,
                 profiles.FolderPathFor(live),
-                Roster: DashboardAssembler.View(entry)));
+                // Adopting a folder reads nothing from the usage endpoint; the next
+                // poll or the next pass fills these rows in.
+                UsageView.Unread,
+                UsageNote: null,
+                RefreshStateView.Idle,
+                DashboardAssembler.View(entry)));
         });
     }
 

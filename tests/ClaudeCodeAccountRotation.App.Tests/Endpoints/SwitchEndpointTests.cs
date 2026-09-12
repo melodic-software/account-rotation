@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json.Nodes;
 using ClaudeCodeAccountRotation.App.Adapters.FileSystem;
+using ClaudeCodeAccountRotation.App.Quota;
 using ClaudeCodeAccountRotation.Core.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -150,6 +151,32 @@ public sealed class SwitchEndpointTests
 
         response.StatusCode.ShouldBe(HttpStatusCode.Conflict);
         (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["refusal"]!.GetValue<string>().ShouldBe("TargetLoginExpired");
+    }
+
+    [Fact]
+    public async Task ASwitchToAStrandedFolderIsRefused()
+    {
+        // The folder's own pair is the dead half of a rotation the write-back could
+        // not land; the working half is in the recovery directory, keyed to the
+        // fingerprint that folder still holds. Making that pair live would move it
+        // out from under the restore's compare-and-swap and no restore could ever
+        // apply again, so the refusal is server-side and not a disabled button.
+        using AppFactory factory = new();
+        await CredentialFiles.WriteAsync(factory.LiveDirectory, "refresh-a", TestContext.Current.CancellationToken);
+        await factory.WriteStateFileAsync("a@example.com", TestContext.Current.CancellationToken);
+        string folder = await factory.ParkedProfileAsync("b@example.com", "refresh-b", TestContext.Current.CancellationToken);
+        (await factory.Services.GetRequiredService<RecoveryFiles>().WriteAsync(
+            folder,
+            CredentialFiles.Pair("refresh-b").Fingerprint,
+            CredentialFiles.Pair("refresh-rotated"),
+            TestContext.Current.CancellationToken)).ShouldBeTrue();
+        using HttpClient client = factory.CreateMutatingClient();
+
+        using HttpResponseMessage response = await client.PostAsync(SwitchUri("b@example.com"), content: null, TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+        (await response.Content.ReadFromJsonAsync<JsonObject>(TestContext.Current.CancellationToken))!["refusal"]!.GetValue<string>().ShouldBe("TargetStrandedInRecovery");
+        (await CredentialFiles.FingerprintAsync(factory.LiveDirectory, TestContext.Current.CancellationToken)).ShouldBe(CredentialFiles.Pair("refresh-a").Fingerprint);
     }
 
     [Fact]
