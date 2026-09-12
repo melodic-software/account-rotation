@@ -14,6 +14,16 @@ public enum SwitchRefusal
     AlreadyOnTarget,
     SharesLiveRefreshToken,
     RefreshLockPresent,
+
+    /// <summary>
+    /// The target folder's rotated credential pair sits in the recovery directory
+    /// after a write-back that failed: the file still in the folder holds the
+    /// refresh token the token endpoint killed the moment it answered, so moving
+    /// it to live would move a dead pair there, and the restore that could still
+    /// put the rotated one back compares against the parked file this switch
+    /// would have taken away. A restart or a per-card refresh clears it.
+    /// </summary>
+    TargetStrandedInRecovery,
     TargetLoginExpired,
     SwitchingBlockedByManagedPolicy,
     ManagedPolicyUnreadable,
